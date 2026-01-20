@@ -9,6 +9,7 @@ interface Message {
 }
 
 const user = ref<User | null>(null)
+const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
 const inputMessage = ref('')
 const isLoading = ref(false)
@@ -29,6 +30,7 @@ const initializeChat = async () => {
     user.value = await api.createUser()
     // Start chat
     const response = await api.startChat(user.value.id)
+    sessionId.value = response.session_id
     messages.value.push({
       role: 'assistant',
       content: response.assistant_message,
@@ -56,7 +58,10 @@ const sendMessage = async () => {
 
   try {
     isLoading.value = true
-    const response = await api.sendMessage(user.value.id, userMessage)
+    const response = await api.sendMessage(user.value.id, userMessage, sessionId.value || undefined)
+
+    // Update session_id if needed
+    sessionId.value = response.session_id
 
     // Add assistant response
     messages.value.push({

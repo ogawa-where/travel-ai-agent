@@ -149,9 +149,7 @@ class LLMGateway:
 
             except Exception as e:
                 last_error = e
-                logger.warning(
-                    f"LLM generate attempt {attempt + 1} failed: {e}"
-                )
+                logger.warning(f"LLM generate attempt {attempt + 1} failed: {e}")
                 if attempt < settings.llm_max_retries - 1:
                     await asyncio.sleep(1)
 
@@ -165,7 +163,9 @@ class LLMGateway:
         temperature: float = 0.3,
     ) -> dict:
         """Generate JSON output with retry on parse failure"""
-        json_system = (system_prompt or "") + "\n\nYou must respond with valid JSON only."
+        json_system = (
+            system_prompt or ""
+        ) + "\n\nYou must respond with valid JSON only."
 
         for attempt in range(settings.llm_max_retries):
             try:

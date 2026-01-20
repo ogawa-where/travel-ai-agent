@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.preference_learner import preference_learner
+from app.agents.summarizer import summarizer_agent
 from app.database import get_db
 from app.domain.models import PreferenceSignal, User, UserProfile
 from app.schemas.preference import (
@@ -15,13 +16,11 @@ from app.schemas.preference import (
     PreferenceSignalResponse,
     UserResponse,
 )
+from app.services.session_manager import session_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/preference", tags=["preference"])
-
-# In-memory conversation history (for MVP; should be moved to DB later)
-conversation_histories: dict[str, list[dict[str, str]]] = {}
 
 
 @router.post("/users", response_model=UserResponse)
@@ -31,13 +30,12 @@ async def create_user(
     """新規ユーザーを作成"""
     user = User()
     db.add(user)
-    await db.flush()  # Flush to get user.id assigned
+    await db.flush()
 
     profile = UserProfile(user_id=user.id, summary="")
     db.add(profile)
     await db.commit()
 
-    # Load relationships
     result = await db.execute(
         select(User)
         .options(selectinload(User.profile), selectinload(User.preference_signals))
@@ -75,20 +73,26 @@ async def start_chat(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Initialize conversation history
-    conversation_histories[user_id] = []
+    # Get or create active session
+    session = await session_manager.get_active_session(
+        db, user_id, mode="preference_learning"
+    )
+    if not session:
+        session = await session_manager.create_session(
+            db, user_id, mode="preference_learning"
+        )
 
     # Generate initial greeting
     greeting = await preference_learner.get_initial_greeting()
 
-    # Add to history
-    conversation_histories[user_id].append({
-        "role": "assistant",
-        "content": greeting,
-    })
+    # Save assistant message to session (turn_index=1 for first assistant message)
+    await session_manager.add_message(
+        db, session.id, role="assistant", content=greeting
+    )
 
     return ChatResponse(
         user_id=user_id,
+        session_id=session.id,
         assistant_message=greeting,
         updated_signals=[],
     )
@@ -102,6 +106,7 @@ async def chat(
     """嗜好学習チャット"""
     user_id = request.user_id
     user_message = request.message
+    session_id = request.session_id
 
     # Check user exists and load profile
     result = await db.execute(
@@ -113,27 +118,35 @@ async def chat(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Initialize history if not exists
-    if user_id not in conversation_histories:
-        conversation_histories[user_id] = []
+    # Get session
+    if session_id:
+        session = await session_manager.get_session(db, session_id)
+    else:
+        session = await session_manager.get_active_session(
+            db, user_id, mode="preference_learning"
+        )
 
-    # Add user message to history
-    conversation_histories[user_id].append({
-        "role": "user",
-        "content": user_message,
-    })
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    # Get context (last assistant message as question context)
-    context = ""
-    for msg in reversed(conversation_histories[user_id]):
+    # Add user message to session
+    await session_manager.add_message(db, session.id, role="user", content=user_message)
+
+    # Get context for LLM (session_summary + last_3_turns_raw)
+    context_data = await session_manager.get_context_for_llm(db, session.id)
+    conversation_history = context_data["last_3_turns_raw"]
+
+    # Get last assistant message as question context
+    question_context = ""
+    for msg in reversed(conversation_history):
         if msg["role"] == "assistant":
-            context = msg["content"]
+            question_context = msg["content"]
             break
 
     # Extract signals from user message
     extraction_result = await preference_learner.extract_signals(
         user_message=user_message,
-        context=context,
+        context=question_context,
     )
 
     # Save new signals to database
@@ -170,7 +183,7 @@ async def chat(
     # Generate response or next question
     assistant_response = extraction_result.get("response", "")
     if not assistant_response:
-        # Generate next question
+        # Generate next question using context
         known_signals = [
             {
                 "category": s.category,
@@ -182,17 +195,41 @@ async def chat(
         assistant_response = await preference_learner.generate_question(
             profile_summary=user.profile.summary if user.profile else "",
             known_signals=known_signals,
-            conversation_history=conversation_histories[user_id],
+            conversation_history=conversation_history,
         )
 
-    # Add assistant response to history
-    conversation_histories[user_id].append({
-        "role": "assistant",
-        "content": assistant_response,
-    })
+    # Add assistant response to session
+    await session_manager.add_message(
+        db, session.id, role="assistant", content=assistant_response
+    )
+
+    # Check if summarization is needed (more than 3 turns)
+    messages_to_summarize = await session_manager.get_turns_to_summarize(db, session.id)
+    if messages_to_summarize:
+        logger.info(
+            f"Summarizing {len(messages_to_summarize)} messages for session {session.id}"
+        )
+        # Get current summary
+        current_summary = context_data["session_summary"]
+
+        # Generate new summary
+        new_summary = await summarizer_agent.summarize_messages(
+            existing_summary=current_summary,
+            messages=messages_to_summarize,
+        )
+
+        # Update summary in database
+        max_turn = max(m.turn_index for m in messages_to_summarize)
+        await session_manager.update_session_summary(
+            db, session.id, new_summary, max_turn
+        )
+
+        # Mark messages as summarized
+        await session_manager.mark_messages_as_summarized(db, messages_to_summarize)
 
     return ChatResponse(
         user_id=user_id,
+        session_id=session.id,
         assistant_message=assistant_response,
         updated_signals=[
             PreferenceSignalResponse.model_validate(s) for s in new_signals
