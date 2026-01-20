@@ -1,4 +1,21 @@
+import { parseApiError, createNetworkError } from './errors'
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+const fetchWithErrorHandling = async (url: string, options?: RequestInit): Promise<Response> => {
+  try {
+    const response = await fetch(url, options)
+    if (!response.ok) {
+      throw await parseApiError(response)
+    }
+    return response
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      throw createNetworkError()
+    }
+    throw error
+  }
+}
 
 interface HealthResponse {
   status: string
@@ -117,43 +134,31 @@ interface TravelFeedbackResponse {
 
 export const api = {
   async healthCheck(): Promise<HealthResponse> {
-    const response = await fetch(`${API_BASE_URL}/health`)
-    if (!response.ok) {
-      throw new Error('Health check failed')
-    }
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/health`)
     return response.json()
   },
 
   async createUser(): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/api/preference/users`, {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/preference/users`, {
       method: 'POST',
     })
-    if (!response.ok) {
-      throw new Error('Failed to create user')
-    }
     return response.json()
   },
 
   async getUser(userId: string): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/api/preference/users/${userId}`)
-    if (!response.ok) {
-      throw new Error('Failed to get user')
-    }
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/preference/users/${userId}`)
     return response.json()
   },
 
   async startChat(userId: string): Promise<ChatResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/preference/chat/start?user_id=${userId}`, {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/preference/chat/start?user_id=${userId}`, {
       method: 'POST',
     })
-    if (!response.ok) {
-      throw new Error('Failed to start chat')
-    }
     return response.json()
   },
 
   async sendMessage(userId: string, message: string, sessionId?: string): Promise<ChatResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/preference/chat`, {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/preference/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -164,33 +169,24 @@ export const api = {
         session_id: sessionId,
       }),
     })
-    if (!response.ok) {
-      throw new Error('Failed to send message')
-    }
     return response.json()
   },
 
   async getUserSignals(userId: string): Promise<PreferenceSignal[]> {
-    const response = await fetch(`${API_BASE_URL}/api/preference/users/${userId}/signals`)
-    if (!response.ok) {
-      throw new Error('Failed to get user signals')
-    }
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/preference/users/${userId}/signals`)
     return response.json()
   },
 
   // 旅行企画モード
   async startTravelChat(userId: string): Promise<TravelChatResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/travel/chat/start?user_id=${userId}`, {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/chat/start?user_id=${userId}`, {
       method: 'POST',
     })
-    if (!response.ok) {
-      throw new Error('Failed to start travel chat')
-    }
     return response.json()
   },
 
   async sendTravelMessage(userId: string, message: string, sessionId?: string): Promise<TravelChatResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/travel/chat`, {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -201,23 +197,17 @@ export const api = {
         session_id: sessionId,
       }),
     })
-    if (!response.ok) {
-      throw new Error('Failed to send travel message')
-    }
     return response.json()
   },
 
   async getTravelPlan(planId: string): Promise<TravelPlan> {
-    const response = await fetch(`${API_BASE_URL}/api/travel/plan/${planId}`)
-    if (!response.ok) {
-      throw new Error('Failed to get travel plan')
-    }
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/plan/${planId}`)
     return response.json()
   },
 
   // 長期記憶関連
   async completeLearning(userId: string, sessionId: string): Promise<LearningCompletionResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/preference/learning/complete`, {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/preference/learning/complete`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -227,14 +217,11 @@ export const api = {
         session_id: sessionId,
       }),
     })
-    if (!response.ok) {
-      throw new Error('Failed to complete learning')
-    }
     return response.json()
   },
 
   async sendFeedback(userId: string, planId: string, feedback: string): Promise<TravelFeedbackResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/travel/feedback`, {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/feedback`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -245,9 +232,6 @@ export const api = {
         feedback: feedback,
       }),
     })
-    if (!response.ok) {
-      throw new Error('Failed to send feedback')
-    }
     return response.json()
   },
 }
