@@ -27,6 +27,7 @@ from app.schemas.travel_planning import (
     TravelWishes,
 )
 from app.services.normalizer import normalizer_deduper
+from app.services.observability import artifact_storage
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,17 @@ class TravelPlanningOrchestrator:
         await db.flush()
 
         try:
+            # 成果物: リクエスト情報を保存
+            artifact_storage.store(
+                plan_run.id,
+                "request",
+                {
+                    "raw_request": request.raw_request,
+                    "user_profile_summary_length": len(user_profile_summary),
+                    "preference_signals_count": len(preference_signals),
+                },
+            )
+
             # ステップ1: 要求の構造化（Translator Agent）
             translate_result = await self._step_translate(
                 db,
@@ -85,6 +97,16 @@ class TravelPlanningOrchestrator:
             request.wishes = wishes.model_dump()
             request.status = "processing"
             await db.flush()
+
+            # 成果物: 構造化されたリクエストを保存
+            artifact_storage.store(
+                plan_run.id,
+                "structured_request",
+                {
+                    "constraints": constraints.model_dump(),
+                    "wishes": wishes.model_dump(),
+                },
+            )
 
             # ステップ2: 検索（Search Agents x3 並列実行）
             search_results = await self._step_search(
@@ -109,6 +131,19 @@ class TravelPlanningOrchestrator:
                 user_profile_summary,
                 preference_signals,
                 wishes,
+            )
+
+            # 成果物: 選定されたPOIを保存
+            artifact_storage.store(
+                plan_run.id,
+                "selected_pois",
+                {
+                    category.value: [
+                        {"name": poi.name, "category": poi.category.value, "final_score": poi.final_score}
+                        for poi in pois[:10]  # 上位10件のみ
+                    ]
+                    for category, pois in ranked_pois.items()
+                },
             )
 
             # ステップ5: 旅程生成（Planner Agent）
@@ -140,6 +175,22 @@ class TravelPlanningOrchestrator:
                 score_breakdown=planner_result.score_breakdown,
             )
             db.add(travel_plan)
+
+            # 成果物: プランと根拠を保存
+            artifact_storage.store(
+                plan_run.id,
+                "plan",
+                {
+                    "itinerary": planner_result.itinerary.model_dump(),
+                    "score": planner_result.score,
+                    "score_breakdown": planner_result.score_breakdown,
+                },
+            )
+            artifact_storage.store(
+                plan_run.id,
+                "rationale",
+                explainer_result.rationale,
+            )
 
             # リクエストとPlanRunを完了
             request.status = "completed"

@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,9 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.domain import models  # noqa: F401 - Import models to register with Base
-from app.routers import preference, travel_planning
+from app.routers import observability, preference, travel_planning
 
-logging.basicConfig(level=logging.INFO)
+# ログレベル設定
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +47,7 @@ app.add_middleware(
 # Include routers
 app.include_router(preference.router, prefix="/api")
 app.include_router(travel_planning.router, prefix="/api")
+app.include_router(observability.router)
 
 
 @app.get("/health")
