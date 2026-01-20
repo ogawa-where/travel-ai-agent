@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { api } from './lib/api'
-import type { User, PreferenceSignal, TravelPlan } from './lib/api'
+import type { User, PreferenceSignal, TravelPlan, UserProfile } from './lib/api'
 import AppHeader from './components/AppHeader.vue'
 import ChatContainer from './components/ChatContainer.vue'
 import PreferenceSidebar from './components/PreferenceSidebar.vue'
@@ -20,6 +20,7 @@ const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
 const isLoading = ref(false)
 const signals = ref<PreferenceSignal[]>([])
+const userProfile = ref<UserProfile | null>(null)
 const currentPlan = ref<TravelPlan | null>(null)
 const isCompletingLearning = ref(false)
 const isSendingFeedback = ref(false)
@@ -85,6 +86,8 @@ const initializeApp = async () => {
   try {
     isLoading.value = true
     user.value = await api.createUser()
+    userProfile.value = user.value.profile
+    signals.value = user.value.preference_signals || []
     await initializePreferenceChat()
   } catch (error) {
     console.error('Failed to initialize app:', error)
@@ -148,8 +151,10 @@ const completeLearning = async () => {
       content: `学習が完了しました！\n\n📝 プロフィール要約:\n${response.profile_summary}\n\n✅ 学習した嗜好: ${response.total_signals}件`,
     })
 
-    // Refresh signals
+    // Refresh signals and profile
     signals.value = await api.getUserSignals(user.value.id)
+    const updatedUser = await api.getUser(user.value.id)
+    userProfile.value = updatedUser.profile
   } catch (error) {
     console.error('Failed to complete learning:', error)
     messages.value.push({
@@ -213,6 +218,7 @@ onMounted(() => {
           v-if="currentMode === 'preference'"
           :signals="signals"
           :is-completing-learning="isCompletingLearning"
+          :profile="userProfile"
           @complete-learning="completeLearning"
         />
 
