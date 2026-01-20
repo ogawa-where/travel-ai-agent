@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { api } from './lib/api'
 import { storage } from './lib/storage'
+import { getErrorMessage } from './lib/errors'
 import type { User, PreferenceSignal, TravelPlan, UserProfile } from './lib/api'
 import AppHeader from './components/AppHeader.vue'
 import ChatContainer from './components/ChatContainer.vue'
@@ -61,6 +62,10 @@ const initializePreferenceChat = async () => {
     })
   } catch (error) {
     console.error('Failed to initialize preference chat:', error)
+    messages.value.push({
+      role: 'assistant',
+      content: `チャットの初期化に失敗しました。\n${getErrorMessage(error)}`,
+    })
   } finally {
     isLoading.value = false
   }
@@ -79,6 +84,10 @@ const initializeTravelChat = async () => {
     })
   } catch (error) {
     console.error('Failed to initialize travel chat:', error)
+    messages.value.push({
+      role: 'assistant',
+      content: `チャットの初期化に失敗しました。\n${getErrorMessage(error)}`,
+    })
   } finally {
     isLoading.value = false
   }
@@ -166,7 +175,7 @@ const sendMessage = async (userMessage: string) => {
     console.error('Failed to send message:', error)
     messages.value.push({
       role: 'assistant',
-      content: 'エラーが発生しました。もう一度お試しください。',
+      content: `エラー: ${getErrorMessage(error)}`,
     })
   } finally {
     isLoading.value = false
@@ -193,7 +202,7 @@ const completeLearning = async () => {
     console.error('Failed to complete learning:', error)
     messages.value.push({
       role: 'assistant',
-      content: '学習の完了処理中にエラーが発生しました。',
+      content: `学習の完了処理中にエラーが発生しました。\n${getErrorMessage(error)}`,
     })
   } finally {
     isCompletingLearning.value = false
@@ -219,7 +228,7 @@ const sendFeedback = async (feedback: string) => {
     console.error('Failed to send feedback:', error)
     messages.value.push({
       role: 'assistant',
-      content: 'フィードバックの送信中にエラーが発生しました。',
+      content: `フィードバックの送信中にエラーが発生しました。\n${getErrorMessage(error)}`,
     })
   } finally {
     isSendingFeedback.value = false
