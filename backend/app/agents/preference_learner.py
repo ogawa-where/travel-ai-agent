@@ -82,15 +82,21 @@ class PreferenceLearnerAgent:
         conversation_history: list[dict[str, str]],
     ) -> str:
         """次の質問を生成"""
-        signals_text = "\n".join(
-            f"- {s['category']}: {s['tag']} (weight: {s['weight']})"
-            for s in known_signals
-        ) or "なし"
+        signals_text = (
+            "\n".join(
+                f"- {s['category']}: {s['tag']} (weight: {s['weight']})"
+                for s in known_signals
+            )
+            or "なし"
+        )
 
-        history_text = "\n".join(
-            f"{m['role']}: {m['content']}"
-            for m in conversation_history[-6:]  # 直近3ターン
-        ) or "なし"
+        history_text = (
+            "\n".join(
+                f"{m['role']}: {m['content']}"
+                for m in conversation_history[-6:]  # 直近3ターン
+            )
+            or "なし"
+        )
 
         prompt = QUESTION_GENERATION_PROMPT.format(
             profile_summary=profile_summary or "まだ情報がありません",
@@ -129,12 +135,16 @@ class PreferenceLearnerAgent:
             for signal in result.get("signals", []):
                 try:
                     category = PreferenceCategory(signal.get("category", ""))
-                    validated_signals.append({
-                        "category": category.value,
-                        "tag": str(signal.get("tag", ""))[:100],
-                        "weight": min(1.0, max(0.0, float(signal.get("weight", 0.5)))),
-                        "evidence": str(signal.get("evidence", "")),
-                    })
+                    validated_signals.append(
+                        {
+                            "category": category.value,
+                            "tag": str(signal.get("tag", ""))[:100],
+                            "weight": min(
+                                1.0, max(0.0, float(signal.get("weight", 0.5)))
+                            ),
+                            "evidence": str(signal.get("evidence", "")),
+                        }
+                    )
                 except (ValueError, TypeError) as e:
                     logger.warning(f"Invalid signal skipped: {signal}, error: {e}")
                     continue

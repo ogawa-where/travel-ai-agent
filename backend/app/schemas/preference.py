@@ -63,9 +63,11 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     user_id: str
     message: str
+    session_id: str | None = None  # 指定しない場合はアクティブなセッションを使用
 
 
 class ChatResponse(BaseModel):
     user_id: str
+    session_id: str  # セッションID
     assistant_message: str
     updated_signals: list[PreferenceSignalResponse] = []
