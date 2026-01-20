@@ -212,7 +212,10 @@ class TravelPlanningOrchestrator:
         constraints: TravelConstraints,
         wishes: TravelWishes,
     ):
-        """ステップ2: 検索（3カテゴリ並列）"""
+        """ステップ2: 検索（3カテゴリ並列）
+
+        CLAUDE.md 8.7: 1-2エージェント失敗時は残りの結果で続行
+        """
         start_time = time.time()
 
         # キーワードを構築
@@ -224,13 +227,18 @@ class TravelPlanningOrchestrator:
             else [],
         }
 
-        results = await search_all_categories(
+        search_result = await search_all_categories(
             destination=constraints.destination,
             constraints=constraints.model_dump(),
             keywords=keywords,
+            raise_on_all_failed=True,  # 全失敗時は例外
         )
 
-        total_results = sum(len(r.items) for r in results.values())
+        # ステータスに応じた出力サマリーを作成
+        status = search_result.status
+        output_parts = [f"total_results: {status.total_results}"]
+        if status.partial_failure:
+            output_parts.append(f"partial_failure: {status.failed_categories}")
 
         await self._record_event(
             db,
@@ -238,11 +246,11 @@ class TravelPlanningOrchestrator:
             step_name="search",
             agent_name="SearchAgents",
             input_summary=f"destination: {constraints.destination}",
-            output_summary=f"total_results: {total_results}",
+            output_summary=", ".join(output_parts),
             latency_ms=int((time.time() - start_time) * 1000),
         )
 
-        return results
+        return search_result.results
 
     async def _step_normalize(
         self,
