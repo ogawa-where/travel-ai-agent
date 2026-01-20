@@ -39,10 +39,47 @@ interface ChatResponse {
 }
 
 // 旅行企画モード用インターフェース
+interface POI {
+  name: string
+  category: string
+  location: string
+  description: string
+  price_range: string
+  duration_minutes: number | null
+  opening_hours: string
+  rating: number | null
+  tags: string[]
+  source_url: string
+}
+
+interface ItineraryItem {
+  time_start: string
+  time_end: string
+  poi: POI
+  notes: string
+  travel_from_previous: string
+}
+
+interface DayPlan {
+  day_number: number
+  date: string | null
+  theme: string
+  items: ItineraryItem[]
+  accommodation: POI | null
+}
+
+interface Itinerary {
+  title: string
+  summary: string
+  days: DayPlan[]
+  total_budget_estimate: number | null
+  highlights: string[]
+}
+
 interface TravelPlan {
   id: string
   request_id: string
-  itinerary: Record<string, unknown>
+  itinerary: Itinerary
   rationale: string
   score: number
   score_breakdown: Record<string, number>
@@ -215,4 +252,4 @@ export const api = {
   },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary }

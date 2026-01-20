@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { PreferenceSignal } from '../lib/api'
 
-const props = defineProps<{
+defineProps<{
   signals: PreferenceSignal[]
   isCompletingLearning: boolean
 }>()

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 type AppMode = 'preference' | 'travel'
 
-const props = defineProps<{
+defineProps<{
   currentMode: AppMode
   modeTitle: string
 }>()
