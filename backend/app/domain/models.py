@@ -231,3 +231,266 @@ class SessionSummary(Base):
     )
 
     session: Mapped["Session"] = relationship(back_populates="summary")
+
+
+# =============================================================================
+# 旅行企画モード用モデル
+# =============================================================================
+
+
+class TravelPlanRequest(Base):
+    """旅行企画リクエスト"""
+
+    __tablename__ = "travel_plan_requests"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    session_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+    )
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("users.id", ondelete="CASCADE"),
+    )
+    # 元のユーザー入力
+    raw_request: Mapped[str] = mapped_column(
+        Text,
+    )
+    # 構造化された制約（Translator Agentが生成）
+    constraints: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # 日程、予算、人数、地域など
+    # 構造化された希望（Translator Agentが生成）
+    wishes: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # やりたいこと、体験したいこと
+    # ステータス
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="pending",
+    )  # pending, processing, completed, failed
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    plans: Mapped[list["TravelPlan"]] = relationship(
+        back_populates="request",
+        cascade="all, delete-orphan",
+    )
+    plan_runs: Mapped[list["PlanRun"]] = relationship(
+        back_populates="request",
+        cascade="all, delete-orphan",
+    )
+
+
+class TravelPlan(Base):
+    """生成された旅程"""
+
+    __tablename__ = "travel_plans"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    request_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("travel_plan_requests.id", ondelete="CASCADE"),
+    )
+    # 旅程データ
+    itinerary: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # 日ごとのスケジュール、POI、移動など
+    # 説明・根拠
+    rationale: Mapped[str] = mapped_column(
+        Text,
+        default="",
+    )  # なぜこの旅程を選んだか
+    # スコア
+    score: Mapped[float] = mapped_column(
+        default=0.0,
+    )  # 総合スコア
+    score_breakdown: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # スコアの内訳
+    # バージョン（複数案生成時）
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+    )
+    is_selected: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )  # ユーザーが選択した案か
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+    request: Mapped["TravelPlanRequest"] = relationship(back_populates="plans")
+
+
+class POICache(Base):
+    """POI（Point of Interest）キャッシュ"""
+
+    __tablename__ = "poi_cache"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    # 正規化されたPOI情報
+    name: Mapped[str] = mapped_column(
+        String(255),
+    )
+    category: Mapped[str] = mapped_column(
+        String(50),
+    )  # activity, food, hotel
+    location: Mapped[str] = mapped_column(
+        String(255),
+        default="",
+    )  # 地域・住所
+    # 詳細情報
+    details: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # 営業時間、価格、特徴など
+    # ソース情報
+    source_url: Mapped[str] = mapped_column(
+        Text,
+        default="",
+    )
+    source_name: Mapped[str] = mapped_column(
+        String(100),
+        default="",
+    )  # tavily, etc.
+    # 埋め込みベクトル（将来のpgvector用）
+    embedding: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+
+class PlanRun(Base):
+    """旅程生成の実行記録（観測性・再現性）"""
+
+    __tablename__ = "plan_runs"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    request_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("travel_plan_requests.id", ondelete="CASCADE"),
+    )
+    # 実行情報
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="running",
+    )  # running, completed, failed
+    # メトリクス
+    metrics: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # 処理時間、LLM呼び出し回数など
+    # 設定スナップショット
+    config_snapshot: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # 使用したモデル、パラメータなど
+    # エラー情報
+    error_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    request: Mapped["TravelPlanRequest"] = relationship(back_populates="plan_runs")
+    events: Mapped[list["SessionEvent"]] = relationship(
+        back_populates="plan_run",
+        cascade="all, delete-orphan",
+    )
+
+
+class SessionEvent(Base):
+    """セッションイベント（各ステップのトレース）"""
+
+    __tablename__ = "session_events"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    plan_run_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("plan_runs.id", ondelete="CASCADE"),
+    )
+    # ステップ情報
+    step_name: Mapped[str] = mapped_column(
+        String(100),
+    )  # translate, search_activity, normalize, etc.
+    agent_name: Mapped[str] = mapped_column(
+        String(100),
+    )  # TranslatorAgent, SearchAgent, etc.
+    # 入出力要約（フルログは保存しない）
+    input_summary: Mapped[str] = mapped_column(
+        Text,
+        default="",
+    )
+    output_summary: Mapped[str] = mapped_column(
+        Text,
+        default="",
+    )
+    # メトリクス
+    latency_ms: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+    # ステータス
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="completed",
+    )  # completed, failed, skipped
+    error_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+    plan_run: Mapped["PlanRun"] = relationship(back_populates="events")
