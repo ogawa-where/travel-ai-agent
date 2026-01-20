@@ -71,3 +71,49 @@ class ChatResponse(BaseModel):
     session_id: str  # セッションID
     assistant_message: str
     updated_signals: list[PreferenceSignalResponse] = []
+
+
+class LearningCompletionRequest(BaseModel):
+    """嗜好学習完了リクエスト"""
+
+    user_id: str
+    session_id: str
+
+
+class LearningCompletionResponse(BaseModel):
+    """嗜好学習完了レスポンス"""
+
+    user_id: str
+    session_id: str
+    profile_summary: str
+    total_signals: int
+    consolidated_signals: int
+    removed_signals: list[str] = []
+    message: str = "嗜好学習が完了しました"
+
+
+class MemoryConsolidationResponse(BaseModel):
+    """メモリ統合レスポンス"""
+
+    user_id: str
+    profile_summary: str
+    signals_count: int
+    cleaned_signals: int = 0
+    limited_signals: int = 0
+
+
+class FeedbackRequest(BaseModel):
+    """フィードバックリクエスト（旅行プランへのフィードバック）"""
+
+    user_id: str
+    plan_id: str
+    feedback: str
+
+
+class FeedbackResponse(BaseModel):
+    """フィードバックレスポンス"""
+
+    user_id: str
+    updated_signals_count: int
+    profile_updated: bool
+    message: str = "フィードバックを反映しました"

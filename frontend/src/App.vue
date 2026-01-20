@@ -19,6 +19,9 @@ const isLoading = ref(false)
 const signals = ref<PreferenceSignal[]>([])
 const currentPlan = ref<TravelPlan | null>(null)
 const messagesContainer = ref<HTMLElement | null>(null)
+const isCompletingLearning = ref(false)
+const feedbackText = ref('')
+const isSendingFeedback = ref(false)
 
 const modeTitle = computed(() => {
   return currentMode.value === 'preference' ? '嗜好学習モード' : '旅行企画モード'
@@ -154,6 +157,60 @@ const handleKeydown = (event: KeyboardEvent) => {
   }
 }
 
+const completeLearning = async () => {
+  if (!user.value || !sessionId.value || isCompletingLearning.value) return
+
+  try {
+    isCompletingLearning.value = true
+    const response = await api.completeLearning(user.value.id, sessionId.value)
+
+    messages.value.push({
+      role: 'assistant',
+      content: `学習が完了しました！\n\n📝 プロフィール要約:\n${response.profile_summary}\n\n✅ 学習した嗜好: ${response.total_signals}件`,
+    })
+    await scrollToBottom()
+
+    // Refresh signals
+    signals.value = await api.getUserSignals(user.value.id)
+  } catch (error) {
+    console.error('Failed to complete learning:', error)
+    messages.value.push({
+      role: 'assistant',
+      content: '学習の完了処理中にエラーが発生しました。',
+    })
+  } finally {
+    isCompletingLearning.value = false
+  }
+}
+
+const sendFeedback = async () => {
+  if (!user.value || !currentPlan.value || !feedbackText.value.trim() || isSendingFeedback.value) return
+
+  try {
+    isSendingFeedback.value = true
+    const response = await api.sendFeedback(
+      user.value.id,
+      currentPlan.value.id,
+      feedbackText.value.trim()
+    )
+
+    messages.value.push({
+      role: 'assistant',
+      content: `フィードバックを受け付けました！${response.profile_updated ? '\nプロフィールを更新しました。' : ''}${response.updated_signals_count > 0 ? `\n${response.updated_signals_count}件の嗜好を学習しました。` : ''}`,
+    })
+    feedbackText.value = ''
+    await scrollToBottom()
+  } catch (error) {
+    console.error('Failed to send feedback:', error)
+    messages.value.push({
+      role: 'assistant',
+      content: 'フィードバックの送信中にエラーが発生しました。',
+    })
+  } finally {
+    isSendingFeedback.value = false
+  }
+}
+
 onMounted(() => {
   initializeApp()
 })
@@ -230,6 +287,16 @@ onMounted(() => {
               <span class="signal-weight">({{ (signal.weight * 100).toFixed(0) }}%)</span>
             </li>
           </ul>
+          <div class="learning-actions" v-if="signals.length > 0">
+            <button
+              class="complete-learning-btn"
+              @click="completeLearning"
+              :disabled="isCompletingLearning"
+            >
+              {{ isCompletingLearning ? '処理中...' : '学習を完了する' }}
+            </button>
+            <p class="action-hint">学習を完了すると、嗜好が整理・統合されます</p>
+          </div>
         </template>
 
         <!-- 旅行企画モードのサイドバー -->
@@ -247,6 +314,23 @@ onMounted(() => {
                 <span class="score-label">{{ key }}</span>
                 <span class="score-value">{{ (score * 100).toFixed(0) }}%</span>
               </div>
+            </div>
+            <div class="feedback-section">
+              <h4>フィードバック</h4>
+              <p class="feedback-hint">このプランへのご意見を教えてください</p>
+              <textarea
+                v-model="feedbackText"
+                placeholder="良かった点、改善点など..."
+                rows="3"
+                class="feedback-input"
+              />
+              <button
+                class="feedback-btn"
+                @click="sendFeedback"
+                :disabled="isSendingFeedback || !feedbackText.trim()"
+              >
+                {{ isSendingFeedback ? '送信中...' : 'フィードバックを送信' }}
+              </button>
             </div>
           </div>
         </template>
@@ -498,5 +582,98 @@ onMounted(() => {
 .score-value {
   color: #2c3e50;
   font-weight: 500;
+}
+
+/* 学習完了ボタン */
+.learning-actions {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #ecf0f1;
+}
+
+.complete-learning-btn {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: #27ae60;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.complete-learning-btn:hover:not(:disabled) {
+  background: #219a52;
+}
+
+.complete-learning-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.action-hint {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: #7f8c8d;
+  text-align: center;
+}
+
+/* フィードバックセクション */
+.feedback-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #ecf0f1;
+}
+
+.feedback-section h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  color: #2c3e50;
+}
+
+.feedback-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  color: #7f8c8d;
+}
+
+.feedback-input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  resize: none;
+  box-sizing: border-box;
+}
+
+.feedback-input:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+.feedback-btn {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: #3498db;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  background: #2980b9;
+}
+
+.feedback-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

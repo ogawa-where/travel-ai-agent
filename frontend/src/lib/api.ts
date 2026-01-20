@@ -60,6 +60,24 @@ interface TravelChatResponse {
   status: string
 }
 
+interface LearningCompletionResponse {
+  user_id: string
+  session_id: string
+  profile_summary: string
+  total_signals: number
+  consolidated_signals: number
+  removed_signals: string[]
+  message: string
+}
+
+interface TravelFeedbackResponse {
+  user_id: string
+  plan_id: string
+  updated_signals_count: number
+  profile_updated: boolean
+  message: string
+}
+
 export const api = {
   async healthCheck(): Promise<HealthResponse> {
     const response = await fetch(`${API_BASE_URL}/health`)
@@ -159,6 +177,42 @@ export const api = {
     }
     return response.json()
   },
+
+  // 長期記憶関連
+  async completeLearning(userId: string, sessionId: string): Promise<LearningCompletionResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/preference/learning/complete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        session_id: sessionId,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error('Failed to complete learning')
+    }
+    return response.json()
+  },
+
+  async sendFeedback(userId: string, planId: string, feedback: string): Promise<TravelFeedbackResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/travel/feedback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        plan_id: planId,
+        feedback: feedback,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error('Failed to send feedback')
+    }
+    return response.json()
+  },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse }

@@ -288,3 +288,22 @@ class TravelChatResponse(BaseModel):
     plan_request_id: str | None = None  # 企画リクエストが作成された場合
     plan: TravelPlanResponse | None = None  # プランが生成された場合
     status: str = "chatting"  # chatting, planning, completed
+
+
+class TravelPlanFeedbackRequest(BaseModel):
+    """旅行プランへのフィードバックリクエスト"""
+
+    user_id: str
+    plan_id: str
+    feedback: str  # ユーザーのフィードバック（良かった点、改善点など）
+    rating: int | None = Field(default=None, ge=1, le=5)  # 5段階評価（任意）
+
+
+class TravelPlanFeedbackResponse(BaseModel):
+    """フィードバックレスポンス"""
+
+    user_id: str
+    plan_id: str
+    updated_signals_count: int
+    profile_updated: bool
+    message: str = "フィードバックを嗜好に反映しました"

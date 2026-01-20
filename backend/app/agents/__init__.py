@@ -1,6 +1,7 @@
 from app.agents.explainer import ExplainerAgent, explainer_agent
 from app.agents.planner import PlannerAgent, planner_agent
 from app.agents.preference_learner import PreferenceLearnerAgent, preference_learner
+from app.agents.profile_updater import ProfileUpdaterAgent, profile_updater
 from app.agents.rerank import RerankAgent, rerank_agent
 from app.agents.search_agents import (
     ActivitySearchAgent,
@@ -20,6 +21,9 @@ __all__ = [
     "preference_learner",
     "SummarizerAgent",
     "summarizer_agent",
+    # 長期記憶
+    "ProfileUpdaterAgent",
+    "profile_updater",
     # 旅行企画モード
     "TranslatorAgent",
     "translator_agent",

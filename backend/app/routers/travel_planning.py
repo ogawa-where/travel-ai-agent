@@ -14,10 +14,13 @@ from app.orchestrator.travel_planning import travel_orchestrator
 from app.schemas.travel_planning import (
     TravelChatRequest,
     TravelChatResponse,
+    TravelPlanFeedbackRequest,
+    TravelPlanFeedbackResponse,
     TravelPlanRequestCreate,
     TravelPlanRequestResponse,
     TravelPlanResponse,
 )
+from app.services.long_term_memory import long_term_memory
 from app.services.session_manager import session_manager
 
 logger = logging.getLogger(__name__)
@@ -333,3 +336,53 @@ def _format_plan_response(plan: TravelPlan) -> str:
         lines.append(f"\n---\n{plan.rationale}")
 
     return "\n".join(lines)
+
+
+@router.post("/feedback", response_model=TravelPlanFeedbackResponse)
+async def submit_feedback(
+    request: TravelPlanFeedbackRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TravelPlanFeedbackResponse:
+    """
+    旅行プランへのフィードバックを送信し、長期記憶に反映
+
+    ユーザーのフィードバックから嗜好を学習し、プロフィールを更新します。
+    """
+    user_id = request.user_id
+    plan_id = request.plan_id
+    feedback = request.feedback
+
+    # ユーザーを確認
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # プランを取得
+    result = await db.execute(select(TravelPlan).where(TravelPlan.id == plan_id))
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    # プランの概要を作成
+    itinerary = plan.itinerary
+    plan_summary = f"""
+目的地: {itinerary.get('title', '不明')}
+概要: {itinerary.get('summary', '')}
+ハイライト: {', '.join(itinerary.get('highlights', []))}
+"""
+
+    # フィードバックを長期記憶に反映
+    feedback_result = await long_term_memory.integrate_feedback(
+        db=db,
+        user_id=user_id,
+        plan_summary=plan_summary,
+        feedback=feedback,
+    )
+
+    return TravelPlanFeedbackResponse(
+        user_id=user_id,
+        plan_id=plan_id,
+        updated_signals_count=len(feedback_result.get("updated_signals", [])),
+        profile_updated=bool(feedback_result.get("profile_update")),
+    )

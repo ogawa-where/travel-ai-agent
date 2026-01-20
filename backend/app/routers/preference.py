@@ -13,9 +13,13 @@ from app.domain.models import PreferenceSignal, User, UserProfile
 from app.schemas.preference import (
     ChatRequest,
     ChatResponse,
+    LearningCompletionRequest,
+    LearningCompletionResponse,
+    MemoryConsolidationResponse,
     PreferenceSignalResponse,
     UserResponse,
 )
+from app.services.long_term_memory import long_term_memory
 from app.services.session_manager import session_manager
 
 logger = logging.getLogger(__name__)
@@ -247,3 +251,85 @@ async def get_user_signals(
         select(PreferenceSignal).where(PreferenceSignal.user_id == user_id)
     )
     return list(result.scalars().all())
+
+
+@router.post("/learning/complete", response_model=LearningCompletionResponse)
+async def complete_learning(
+    request: LearningCompletionRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> LearningCompletionResponse:
+    """
+    嗜好学習セッションを完了し、長期記憶を統合・整理する
+
+    - セッションを非アクティブに
+    - プロフィール要約を更新
+    - 嗜好シグナルを統合・重複排除
+    - 低重みシグナルを削除
+    """
+    user_id = request.user_id
+    session_id = request.session_id
+
+    # Check user exists
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Complete learning session and consolidate memory
+    consolidation_result = await long_term_memory.complete_learning_session(
+        db, user_id, session_id
+    )
+
+    return LearningCompletionResponse(
+        user_id=user_id,
+        session_id=session_id,
+        profile_summary=consolidation_result["profile_summary"],
+        total_signals=len(consolidation_result["consolidated_signals"]),
+        consolidated_signals=len(consolidation_result["consolidated_signals"]),
+        removed_signals=consolidation_result.get("removed_signals", []),
+    )
+
+
+@router.post("/memory/consolidate", response_model=MemoryConsolidationResponse)
+async def consolidate_memory(
+    user_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MemoryConsolidationResponse:
+    """
+    長期記憶を手動で統合・整理する
+
+    嗜好学習モード完了時以外にも、手動で統合を実行できる
+    """
+    # Check user exists
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get active session if any
+    session = await session_manager.get_active_session(
+        db, user_id, mode="preference_learning"
+    )
+    session_id = session.id if session else None
+
+    # Consolidate memory
+    consolidation_result = await long_term_memory.consolidate_memory(
+        db, user_id, session_id
+    )
+
+    # Cleanup and enforce limits
+    cleaned = await long_term_memory.cleanup_low_weight_signals(db, user_id)
+    limited = await long_term_memory.enforce_signal_limit(db, user_id)
+
+    await db.commit()
+
+    # Get final signal count
+    memory = await long_term_memory.get_user_profile(db, user_id)
+
+    return MemoryConsolidationResponse(
+        user_id=user_id,
+        profile_summary=consolidation_result["profile_summary"],
+        signals_count=len(memory["signals"]),
+        cleaned_signals=cleaned,
+        limited_signals=limited,
+    )
