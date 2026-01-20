@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { api } from './lib/api'
+import { storage } from './lib/storage'
 import type { User, PreferenceSignal, TravelPlan, UserProfile } from './lib/api'
 import AppHeader from './components/AppHeader.vue'
 import ChatContainer from './components/ChatContainer.vue'
@@ -85,7 +86,25 @@ const initializeTravelChat = async () => {
 const initializeApp = async () => {
   try {
     isLoading.value = true
+
+    // Check for existing user in localStorage
+    const storedUserId = storage.getUserId()
+    if (storedUserId) {
+      try {
+        user.value = await api.getUser(storedUserId)
+        userProfile.value = user.value.profile
+        signals.value = user.value.preference_signals || []
+        await initializePreferenceChat()
+        return
+      } catch {
+        // User not found, clear storage and create new user
+        storage.clearUserId()
+      }
+    }
+
+    // Create new user
     user.value = await api.createUser()
+    storage.setUserId(user.value.id)
     userProfile.value = user.value.profile
     signals.value = user.value.preference_signals || []
     await initializePreferenceChat()
@@ -94,6 +113,18 @@ const initializeApp = async () => {
   } finally {
     isLoading.value = false
   }
+}
+
+const resetApp = async () => {
+  storage.clearAll()
+  user.value = null
+  sessionId.value = null
+  messages.value = []
+  signals.value = []
+  userProfile.value = null
+  currentPlan.value = null
+  currentMode.value = 'preference'
+  await initializeApp()
 }
 
 const sendMessage = async (userMessage: string) => {
@@ -203,6 +234,7 @@ onMounted(() => {
       :current-mode="currentMode"
       :mode-title="modeTitle"
       @switch-mode="switchMode"
+      @reset="resetApp"
     />
 
     <main class="main">

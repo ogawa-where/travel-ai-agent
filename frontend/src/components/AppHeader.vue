@@ -8,6 +8,7 @@ defineProps<{
 
 const emit = defineEmits<{
   switchMode: [mode: AppMode]
+  reset: []
 }>()
 </script>
 
@@ -18,18 +19,23 @@ const emit = defineEmits<{
         <h1>Travel AI Agent</h1>
         <p>{{ modeTitle }}</p>
       </div>
-      <div class="mode-switcher">
-        <button
-          :class="['mode-btn', { active: currentMode === 'preference' }]"
-          @click="emit('switchMode', 'preference')"
-        >
-          嗜好学習
-        </button>
-        <button
-          :class="['mode-btn', { active: currentMode === 'travel' }]"
-          @click="emit('switchMode', 'travel')"
-        >
-          旅行企画
+      <div class="header-actions">
+        <div class="mode-switcher">
+          <button
+            :class="['mode-btn', { active: currentMode === 'preference' }]"
+            @click="emit('switchMode', 'preference')"
+          >
+            嗜好学習
+          </button>
+          <button
+            :class="['mode-btn', { active: currentMode === 'travel' }]"
+            @click="emit('switchMode', 'travel')"
+          >
+            旅行企画
+          </button>
+        </div>
+        <button class="reset-btn" @click="emit('reset')" title="新しいユーザーとして開始">
+          リセット
         </button>
       </div>
     </div>
@@ -62,6 +68,12 @@ const emit = defineEmits<{
   font-size: 0.9rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 .mode-switcher {
   display: flex;
   gap: 0.5rem;
@@ -85,5 +97,22 @@ const emit = defineEmits<{
 .mode-btn.active {
   background: white;
   color: #2c3e50;
+}
+
+.reset-btn {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+
+.reset-btn:hover {
+  background: rgba(231, 76, 60, 0.8);
+  border-color: rgba(231, 76, 60, 0.8);
+  color: white;
 }
 </style>
