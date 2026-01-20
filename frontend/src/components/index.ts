@@ -1,5 +1,8 @@
 export { default as AppHeader } from './AppHeader.vue'
 export { default as ChatContainer } from './ChatContainer.vue'
+export { default as ChatSkeleton } from './ChatSkeleton.vue'
 export { default as ItineraryDisplay } from './ItineraryDisplay.vue'
 export { default as PreferenceSidebar } from './PreferenceSidebar.vue'
+export { default as SidebarSkeleton } from './SidebarSkeleton.vue'
+export { default as SkeletonLoader } from './SkeletonLoader.vue'
 export { default as TravelSidebar } from './TravelSidebar.vue'

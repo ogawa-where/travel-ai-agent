@@ -2,10 +2,12 @@
 import { ref } from 'vue'
 import type { TravelPlan } from '../lib/api'
 import ItineraryDisplay from './ItineraryDisplay.vue'
+import SidebarSkeleton from './SidebarSkeleton.vue'
 
 const props = defineProps<{
   plan: TravelPlan | null
   isSendingFeedback: boolean
+  isLoading: boolean
 }>()
 
 const emit = defineEmits<{
@@ -38,12 +40,14 @@ const getScoreLabel = (key: string): string => {
 
 <template>
   <div class="travel-sidebar">
-    <h2>旅行プラン</h2>
-    <div v-if="!plan" class="no-plan">
-      まだプランが作成されていません。<br>
-      希望を入力して「プランを作って」と言ってみてください。
-    </div>
-    <div v-else class="plan-container">
+    <SidebarSkeleton v-if="isLoading" variant="travel" />
+    <template v-else>
+      <h2>旅行プラン</h2>
+      <div v-if="!plan" class="no-plan">
+        まだプランが作成されていません。<br>
+        希望を入力して「プランを作って」と言ってみてください。
+      </div>
+      <div v-else class="plan-container">
       <div class="plan-header">
         <h3>{{ plan.itinerary.title || '旅程' }}</h3>
         <p v-if="plan.itinerary.summary" class="plan-summary-text">
@@ -92,7 +96,8 @@ const getScoreLabel = (key: string): string => {
           {{ isSendingFeedback ? '送信中...' : 'フィードバックを送信' }}
         </button>
       </div>
-    </div>
+      </div>
+    </template>
   </div>
 </template>
 

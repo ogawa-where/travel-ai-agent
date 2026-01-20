@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { PreferenceSignal, UserProfile } from '../lib/api'
+import SidebarSkeleton from './SidebarSkeleton.vue'
 
 defineProps<{
   signals: PreferenceSignal[]
   isCompletingLearning: boolean
   profile: UserProfile | null
+  isLoading: boolean
 }>()
 
 const emit = defineEmits<{
@@ -14,32 +16,35 @@ const emit = defineEmits<{
 
 <template>
   <div class="preference-sidebar">
-    <div v-if="profile" class="profile-section">
-      <h2>プロフィール</h2>
-      <p class="profile-summary">{{ profile.summary }}</p>
-    </div>
+    <SidebarSkeleton v-if="isLoading" variant="preference" />
+    <template v-else>
+      <div v-if="profile" class="profile-section">
+        <h2>プロフィール</h2>
+        <p class="profile-summary">{{ profile.summary }}</p>
+      </div>
 
-    <h2>学習した嗜好</h2>
-    <div v-if="signals.length === 0" class="no-signals">
-      まだ嗜好が学習されていません
-    </div>
-    <ul v-else class="signals-list">
-      <li v-for="signal in signals" :key="signal.id" class="signal-item">
-        <span class="signal-category">{{ signal.category }}</span>
-        <span class="signal-tag">{{ signal.tag }}</span>
-        <span class="signal-weight">({{ (signal.weight * 100).toFixed(0) }}%)</span>
-      </li>
-    </ul>
-    <div class="learning-actions" v-if="signals.length > 0">
-      <button
-        class="complete-learning-btn"
-        @click="emit('completeLearning')"
-        :disabled="isCompletingLearning"
-      >
-        {{ isCompletingLearning ? '処理中...' : '学習を完了する' }}
-      </button>
-      <p class="action-hint">学習を完了すると、嗜好が整理・統合されます</p>
-    </div>
+      <h2>学習した嗜好</h2>
+      <div v-if="signals.length === 0" class="no-signals">
+        まだ嗜好が学習されていません
+      </div>
+        <ul v-else class="signals-list">
+        <li v-for="signal in signals" :key="signal.id" class="signal-item">
+          <span class="signal-category">{{ signal.category }}</span>
+          <span class="signal-tag">{{ signal.tag }}</span>
+          <span class="signal-weight">({{ (signal.weight * 100).toFixed(0) }}%)</span>
+        </li>
+      </ul>
+      <div class="learning-actions" v-if="signals.length > 0">
+        <button
+          class="complete-learning-btn"
+          @click="emit('completeLearning')"
+          :disabled="isCompletingLearning"
+        >
+          {{ isCompletingLearning ? '処理中...' : '学習を完了する' }}
+        </button>
+        <p class="action-hint">学習を完了すると、嗜好が整理・統合されます</p>
+      </div>
+    </template>
   </div>
 </template>
 

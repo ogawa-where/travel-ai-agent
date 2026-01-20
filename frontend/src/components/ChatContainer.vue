@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, computed } from 'vue'
+import ChatSkeleton from './ChatSkeleton.vue'
 
 type AppMode = 'preference' | 'travel'
 
@@ -51,6 +52,10 @@ const loadingText = () => {
   return props.currentMode === 'travel' ? 'プラン作成中...' : '考え中...'
 }
 
+const showInitialSkeleton = computed(() => {
+  return props.isLoading && props.messages.length === 0
+})
+
 // メッセージが追加されたらスクロール
 watch(() => props.messages.length, scrollToBottom)
 </script>
@@ -58,19 +63,22 @@ watch(() => props.messages.length, scrollToBottom)
 <template>
   <div class="chat-container">
     <div class="messages" ref="messagesContainer">
-      <div
-        v-for="(message, index) in messages"
-        :key="index"
-        :class="['message', message.role]"
-      >
-        <div class="message-content" v-html="message.content.replace(/\n/g, '<br>')">
+      <ChatSkeleton v-if="showInitialSkeleton" />
+      <template v-else>
+        <div
+          v-for="(message, index) in messages"
+          :key="index"
+          :class="['message', message.role]"
+        >
+          <div class="message-content" v-html="message.content.replace(/\n/g, '<br>')">
+          </div>
         </div>
-      </div>
-      <div v-if="isLoading" class="message assistant">
-        <div class="message-content loading">
-          {{ loadingText() }}
+        <div v-if="isLoading && messages.length > 0" class="message assistant">
+          <div class="message-content loading">
+            {{ loadingText() }}
+          </div>
         </div>
-      </div>
+      </template>
     </div>
 
     <div class="input-area">
