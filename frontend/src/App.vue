@@ -20,6 +20,7 @@ const user = ref<User | null>(null)
 const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
 const isLoading = ref(false)
+const isInitializing = ref(true)
 const signals = ref<PreferenceSignal[]>([])
 const userProfile = ref<UserProfile | null>(null)
 const currentPlan = ref<TravelPlan | null>(null)
@@ -86,6 +87,7 @@ const initializeTravelChat = async () => {
 const initializeApp = async () => {
   try {
     isLoading.value = true
+    isInitializing.value = true
 
     // Check for existing user in localStorage
     const storedUserId = storage.getUserId()
@@ -112,6 +114,7 @@ const initializeApp = async () => {
     console.error('Failed to initialize app:', error)
   } finally {
     isLoading.value = false
+    isInitializing.value = false
   }
 }
 
@@ -251,6 +254,7 @@ onMounted(() => {
           :signals="signals"
           :is-completing-learning="isCompletingLearning"
           :profile="userProfile"
+          :is-loading="isInitializing"
           @complete-learning="completeLearning"
         />
 
@@ -258,6 +262,7 @@ onMounted(() => {
           v-else
           :plan="currentPlan"
           :is-sending-feedback="isSendingFeedback"
+          :is-loading="isInitializing"
           @send-feedback="sendFeedback"
         />
       </aside>
