@@ -1,20 +1,28 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import { api } from './lib/api'
-import type { User, PreferenceSignal } from './lib/api'
+import type { User, PreferenceSignal, TravelPlan } from './lib/api'
+
+type AppMode = 'preference' | 'travel'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
 }
 
+const currentMode = ref<AppMode>('preference')
 const user = ref<User | null>(null)
 const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
 const inputMessage = ref('')
 const isLoading = ref(false)
 const signals = ref<PreferenceSignal[]>([])
+const currentPlan = ref<TravelPlan | null>(null)
 const messagesContainer = ref<HTMLElement | null>(null)
+
+const modeTitle = computed(() => {
+  return currentMode.value === 'preference' ? '嗜好学習モード' : '旅行企画モード'
+})
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -23,12 +31,28 @@ const scrollToBottom = async () => {
   }
 }
 
-const initializeChat = async () => {
+const switchMode = async (mode: AppMode) => {
+  if (mode === currentMode.value) return
+
+  currentMode.value = mode
+  messages.value = []
+  sessionId.value = null
+  currentPlan.value = null
+
+  if (user.value) {
+    if (mode === 'preference') {
+      await initializePreferenceChat()
+    } else {
+      await initializeTravelChat()
+    }
+  }
+}
+
+const initializePreferenceChat = async () => {
+  if (!user.value) return
+
   try {
     isLoading.value = true
-    // Create new user
-    user.value = await api.createUser()
-    // Start chat
     const response = await api.startChat(user.value.id)
     sessionId.value = response.session_id
     messages.value.push({
@@ -37,7 +61,38 @@ const initializeChat = async () => {
     })
     await scrollToBottom()
   } catch (error) {
-    console.error('Failed to initialize chat:', error)
+    console.error('Failed to initialize preference chat:', error)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+const initializeTravelChat = async () => {
+  if (!user.value) return
+
+  try {
+    isLoading.value = true
+    const response = await api.startTravelChat(user.value.id)
+    sessionId.value = response.session_id
+    messages.value.push({
+      role: 'assistant',
+      content: response.assistant_message,
+    })
+    await scrollToBottom()
+  } catch (error) {
+    console.error('Failed to initialize travel chat:', error)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+const initializeApp = async () => {
+  try {
+    isLoading.value = true
+    user.value = await api.createUser()
+    await initializePreferenceChat()
+  } catch (error) {
+    console.error('Failed to initialize app:', error)
   } finally {
     isLoading.value = false
   }
@@ -49,7 +104,6 @@ const sendMessage = async () => {
   const userMessage = inputMessage.value.trim()
   inputMessage.value = ''
 
-  // Add user message to UI
   messages.value.push({
     role: 'user',
     content: userMessage,
@@ -58,20 +112,27 @@ const sendMessage = async () => {
 
   try {
     isLoading.value = true
-    const response = await api.sendMessage(user.value.id, userMessage, sessionId.value || undefined)
 
-    // Update session_id if needed
-    sessionId.value = response.session_id
-
-    // Add assistant response
-    messages.value.push({
-      role: 'assistant',
-      content: response.assistant_message,
-    })
-
-    // Update signals if any
-    if (response.updated_signals.length > 0) {
-      signals.value = [...signals.value, ...response.updated_signals]
+    if (currentMode.value === 'preference') {
+      const response = await api.sendMessage(user.value.id, userMessage, sessionId.value || undefined)
+      sessionId.value = response.session_id
+      messages.value.push({
+        role: 'assistant',
+        content: response.assistant_message,
+      })
+      if (response.updated_signals.length > 0) {
+        signals.value = [...signals.value, ...response.updated_signals]
+      }
+    } else {
+      const response = await api.sendTravelMessage(user.value.id, userMessage, sessionId.value || undefined)
+      sessionId.value = response.session_id
+      messages.value.push({
+        role: 'assistant',
+        content: response.assistant_message,
+      })
+      if (response.plan) {
+        currentPlan.value = response.plan
+      }
     }
 
     await scrollToBottom()
@@ -94,15 +155,33 @@ const handleKeydown = (event: KeyboardEvent) => {
 }
 
 onMounted(() => {
-  initializeChat()
+  initializeApp()
 })
 </script>
 
 <template>
   <div class="app">
     <header class="header">
-      <h1>Travel AI Agent</h1>
-      <p>嗜好学習モード</p>
+      <div class="header-content">
+        <div>
+          <h1>Travel AI Agent</h1>
+          <p>{{ modeTitle }}</p>
+        </div>
+        <div class="mode-switcher">
+          <button
+            :class="['mode-btn', { active: currentMode === 'preference' }]"
+            @click="switchMode('preference')"
+          >
+            嗜好学習
+          </button>
+          <button
+            :class="['mode-btn', { active: currentMode === 'travel' }]"
+            @click="switchMode('travel')"
+          >
+            旅行企画
+          </button>
+        </div>
+      </div>
     </header>
 
     <main class="main">
@@ -113,13 +192,12 @@ onMounted(() => {
             :key="index"
             :class="['message', message.role]"
           >
-            <div class="message-content">
-              {{ message.content }}
+            <div class="message-content" v-html="message.content.replace(/\n/g, '<br>')">
             </div>
           </div>
           <div v-if="isLoading" class="message assistant">
             <div class="message-content loading">
-              考え中...
+              {{ currentMode === 'travel' ? 'プラン作成中...' : '考え中...' }}
             </div>
           </div>
         </div>
@@ -128,7 +206,7 @@ onMounted(() => {
           <textarea
             v-model="inputMessage"
             @keydown="handleKeydown"
-            placeholder="メッセージを入力..."
+            :placeholder="currentMode === 'travel' ? '旅行の希望を入力... (例: 来月、京都に2泊3日で一人旅したい)' : 'メッセージを入力...'"
             :disabled="isLoading"
             rows="2"
           />
@@ -139,17 +217,39 @@ onMounted(() => {
       </div>
 
       <aside class="sidebar">
-        <h2>学習した嗜好</h2>
-        <div v-if="signals.length === 0" class="no-signals">
-          まだ嗜好が学習されていません
-        </div>
-        <ul v-else class="signals-list">
-          <li v-for="signal in signals" :key="signal.id" class="signal-item">
-            <span class="signal-category">{{ signal.category }}</span>
-            <span class="signal-tag">{{ signal.tag }}</span>
-            <span class="signal-weight">({{ (signal.weight * 100).toFixed(0) }}%)</span>
-          </li>
-        </ul>
+        <!-- 嗜好学習モードのサイドバー -->
+        <template v-if="currentMode === 'preference'">
+          <h2>学習した嗜好</h2>
+          <div v-if="signals.length === 0" class="no-signals">
+            まだ嗜好が学習されていません
+          </div>
+          <ul v-else class="signals-list">
+            <li v-for="signal in signals" :key="signal.id" class="signal-item">
+              <span class="signal-category">{{ signal.category }}</span>
+              <span class="signal-tag">{{ signal.tag }}</span>
+              <span class="signal-weight">({{ (signal.weight * 100).toFixed(0) }}%)</span>
+            </li>
+          </ul>
+        </template>
+
+        <!-- 旅行企画モードのサイドバー -->
+        <template v-else>
+          <h2>旅行プラン</h2>
+          <div v-if="!currentPlan" class="no-plan">
+            まだプランが作成されていません。<br>
+            希望を入力して「プランを作って」と言ってみてください。
+          </div>
+          <div v-else class="plan-summary">
+            <h3>{{ currentPlan.itinerary.title || '旅程' }}</h3>
+            <p class="plan-score">スコア: {{ (currentPlan.score * 100).toFixed(0) }}%</p>
+            <div class="score-breakdown">
+              <div v-for="(score, key) in currentPlan.score_breakdown" :key="key" class="score-item">
+                <span class="score-label">{{ key }}</span>
+                <span class="score-value">{{ (score * 100).toFixed(0) }}%</span>
+              </div>
+            </div>
+          </div>
+        </template>
       </aside>
     </main>
   </div>
@@ -169,6 +269,14 @@ onMounted(() => {
   padding: 1rem 2rem;
 }
 
+.header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
 .header h1 {
   margin: 0;
   font-size: 1.5rem;
@@ -178,6 +286,31 @@ onMounted(() => {
   margin: 0.25rem 0 0;
   opacity: 0.8;
   font-size: 0.9rem;
+}
+
+.mode-switcher {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.mode-btn {
+  padding: 0.5rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: transparent;
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.mode-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mode-btn.active {
+  background: white;
+  color: #2c3e50;
 }
 
 .main {
@@ -228,6 +361,7 @@ onMounted(() => {
   align-self: flex-start;
   background: #ecf0f1;
   color: #2c3e50;
+  white-space: pre-wrap;
 }
 
 .message-content.loading {
@@ -290,9 +424,11 @@ onMounted(() => {
   color: #2c3e50;
 }
 
-.no-signals {
+.no-signals,
+.no-plan {
   color: #7f8c8d;
   font-size: 0.9rem;
+  line-height: 1.5;
 }
 
 .signals-list {
@@ -328,5 +464,39 @@ onMounted(() => {
 .signal-weight {
   color: #7f8c8d;
   font-size: 0.8rem;
+}
+
+/* 旅行企画モード用スタイル */
+.plan-summary h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: #2c3e50;
+}
+
+.plan-score {
+  font-size: 0.9rem;
+  color: #27ae60;
+  margin: 0 0 1rem;
+}
+
+.score-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.score-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+}
+
+.score-label {
+  color: #7f8c8d;
+}
+
+.score-value {
+  color: #2c3e50;
+  font-weight: 500;
 }
 </style>

@@ -38,6 +38,28 @@ interface ChatResponse {
   updated_signals: PreferenceSignal[]
 }
 
+// 旅行企画モード用インターフェース
+interface TravelPlan {
+  id: string
+  request_id: string
+  itinerary: Record<string, unknown>
+  rationale: string
+  score: number
+  score_breakdown: Record<string, number>
+  version: number
+  is_selected: boolean
+  created_at: string
+}
+
+interface TravelChatResponse {
+  user_id: string
+  session_id: string
+  assistant_message: string
+  plan_request_id: string | null
+  plan: TravelPlan | null
+  status: string
+}
+
 export const api = {
   async healthCheck(): Promise<HealthResponse> {
     const response = await fetch(`${API_BASE_URL}/health`)
@@ -100,6 +122,43 @@ export const api = {
     }
     return response.json()
   },
+
+  // 旅行企画モード
+  async startTravelChat(userId: string): Promise<TravelChatResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/travel/chat/start?user_id=${userId}`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      throw new Error('Failed to start travel chat')
+    }
+    return response.json()
+  },
+
+  async sendTravelMessage(userId: string, message: string, sessionId?: string): Promise<TravelChatResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/travel/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        message: message,
+        session_id: sessionId,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error('Failed to send travel message')
+    }
+    return response.json()
+  },
+
+  async getTravelPlan(planId: string): Promise<TravelPlan> {
+    const response = await fetch(`${API_BASE_URL}/api/travel/plan/${planId}`)
+    if (!response.ok) {
+      throw new Error('Failed to get travel plan')
+    }
+    return response.json()
+  },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse }

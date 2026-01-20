@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.domain import models  # noqa: F401 - Import models to register with Base
-from app.routers import preference
+from app.routers import preference, travel_planning
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(preference.router, prefix="/api")
+app.include_router(travel_planning.router, prefix="/api")
 
 
 @app.get("/health")
