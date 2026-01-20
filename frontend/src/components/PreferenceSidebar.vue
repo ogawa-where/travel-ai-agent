@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { PreferenceSignal } from '../lib/api'
+import type { PreferenceSignal, UserProfile } from '../lib/api'
 
 defineProps<{
   signals: PreferenceSignal[]
   isCompletingLearning: boolean
+  profile: UserProfile | null
 }>()
 
 const emit = defineEmits<{
@@ -13,6 +14,11 @@ const emit = defineEmits<{
 
 <template>
   <div class="preference-sidebar">
+    <div v-if="profile" class="profile-section">
+      <h2>プロフィール</h2>
+      <p class="profile-summary">{{ profile.summary }}</p>
+    </div>
+
     <h2>学習した嗜好</h2>
     <div v-if="signals.length === 0" class="no-signals">
       まだ嗜好が学習されていません
@@ -42,6 +48,22 @@ const emit = defineEmits<{
   margin: 0 0 1rem;
   font-size: 1rem;
   color: #2c3e50;
+}
+
+.profile-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #ecf0f1;
+}
+
+.profile-summary {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #34495e;
+  line-height: 1.6;
+  background: #f8f9fa;
+  padding: 0.75rem;
+  border-radius: 6px;
 }
 
 .no-signals {
