@@ -1,6 +1,10 @@
 """
 Search Agents
 
+CLAUDE.md セクション8.7に基づくエラーハンドリング:
+- 1-2エージェント失敗: 残りの結果で続行
+- 全エージェント失敗: エラーを報告
+
 検索を担当するエージェント群（I/O主体）。
 - ActivitySearchAgent: 体験・観光の検索
 - FoodSearchAgent: 食・レストランの検索
@@ -13,7 +17,9 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 
+from app.core.exceptions import SearchAllFailedError
 from app.schemas.travel_planning import (
     POICategory,
     POISearchResult,
@@ -23,6 +29,38 @@ from app.schemas.travel_planning import (
 from app.services.tavily_client import tavily_client
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SearchStatus:
+    """検索ステータス"""
+
+    total_categories: int = 0
+    successful_categories: list[str] = field(default_factory=list)
+    failed_categories: list[str] = field(default_factory=list)
+    total_results: int = 0
+    partial_failure: bool = False
+    all_failed: bool = False
+    error_messages: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def success_rate(self) -> float:
+        """成功率"""
+        if self.total_categories == 0:
+            return 0.0
+        return len(self.successful_categories) / self.total_categories
+
+    def to_dict(self) -> dict:
+        """辞書に変換"""
+        return {
+            "total_categories": self.total_categories,
+            "successful_categories": self.successful_categories,
+            "failed_categories": self.failed_categories,
+            "total_results": self.total_results,
+            "partial_failure": self.partial_failure,
+            "all_failed": self.all_failed,
+            "success_rate": self.success_rate,
+        }
 
 
 class BaseSearchAgent(ABC):
@@ -330,21 +368,36 @@ class HotelSearchAgent(BaseSearchAgent):
 # =============================================================================
 
 
+@dataclass
+class SearchAllResult:
+    """全カテゴリ検索の結果"""
+
+    results: dict  # POICategory -> SearchResult
+    status: SearchStatus
+
+
 async def search_all_categories(
     destination: str,
     constraints: dict | None = None,
     keywords: dict[str, list[str]] | None = None,
-) -> dict[POICategory, SearchResult]:
+    raise_on_all_failed: bool = True,
+) -> SearchAllResult:
     """
     3カテゴリを並列で検索
+
+    CLAUDE.md 8.7: 1-2エージェント失敗時は残りの結果で続行
 
     Args:
         destination: 目的地
         constraints: 制約条件
         keywords: カテゴリごとのキーワード
+        raise_on_all_failed: 全エージェント失敗時に例外を発生させるか
 
     Returns:
-        カテゴリごとの検索結果
+        SearchAllResult: 検索結果とステータス
+
+    Raises:
+        SearchAllFailedError: 全エージェントが失敗した場合（raise_on_all_failed=True時）
     """
     constraints = constraints or {}
     keywords = keywords or {}
@@ -384,6 +437,7 @@ async def search_all_categories(
 
     # 結果を整理
     output = {}
+    status = SearchStatus(total_categories=3)
     agents = [
         (POICategory.ACTIVITY, results[0]),
         (POICategory.FOOD, results[1]),
@@ -391,8 +445,11 @@ async def search_all_categories(
     ]
 
     for category, result in agents:
+        category_name = category.value
         if isinstance(result, Exception):
-            logger.error(f"Search failed for {category}: {result}")
+            logger.error(f"Search failed for {category_name}: {result}")
+            status.failed_categories.append(category_name)
+            status.error_messages[category_name] = str(result)
             output[category] = SearchResult(
                 category=category,
                 query=destination,
@@ -401,9 +458,42 @@ async def search_all_categories(
                 search_time_ms=0,
             )
         else:
+            # 結果が空でも成功とみなす（検索自体は成功）
+            status.successful_categories.append(category_name)
+            status.total_results += len(result.items)
             output[category] = result
 
-    return output
+    # ステータスを更新
+    status.all_failed = len(status.failed_categories) == status.total_categories
+    status.partial_failure = (
+        len(status.failed_categories) > 0 and not status.all_failed
+    )
+
+    # ログ出力
+    if status.all_failed:
+        logger.error(
+            f"All search agents failed for destination={destination}"
+        )
+        if raise_on_all_failed:
+            raise SearchAllFailedError(
+                details={
+                    "destination": destination,
+                    "errors": status.error_messages,
+                }
+            )
+    elif status.partial_failure:
+        logger.warning(
+            f"Partial search failure for destination={destination}: "
+            f"failed={status.failed_categories}, "
+            f"successful={status.successful_categories}"
+        )
+    else:
+        logger.info(
+            f"All search agents succeeded for destination={destination}: "
+            f"total_results={status.total_results}"
+        )
+
+    return SearchAllResult(results=output, status=status)
 
 
 # Singleton instances
