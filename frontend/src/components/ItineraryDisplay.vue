@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import type { Itinerary } from '../lib/api'
+import type { Itinerary, POIFeedbackType, POICategory } from '../lib/api'
 
-defineProps<{
+const props = defineProps<{
   itinerary: Itinerary
+  feedbackEnabled?: boolean
+  poiFeedback?: Record<string, POIFeedbackType>  // key: poi_name, value: 'good' | 'bad'
+}>()
+
+const emit = defineEmits<{
+  'poi-feedback': [poiName: string, category: POICategory, feedbackType: POIFeedbackType, tags: string[]]
 }>()
 
 const formatTime = (start: string, end: string): string => {
@@ -35,6 +41,14 @@ const getCategoryLabel = (category: string): string => {
     default:
       return 'その他'
   }
+}
+
+const getFeedbackState = (poiName: string): POIFeedbackType | null => {
+  return props.poiFeedback?.[poiName] || null
+}
+
+const handleFeedback = (poiName: string, category: string, feedbackType: POIFeedbackType, tags: string[] = []) => {
+  emit('poi-feedback', poiName, category as POICategory, feedbackType, tags)
 }
 </script>
 
@@ -81,6 +95,26 @@ const getCategoryLabel = (category: string): string => {
                   <span class="item-icon">{{ getCategoryIcon(item.poi.category) }}</span>
                   <span class="item-name">{{ item.poi.name }}</span>
                   <span class="item-category">{{ getCategoryLabel(item.poi.category) }}</span>
+
+                  <!-- Feedback buttons -->
+                  <div v-if="feedbackEnabled" class="feedback-buttons">
+                    <button
+                      :class="['feedback-btn', 'good', { active: getFeedbackState(item.poi.name) === 'good' }]"
+                      @click.stop="handleFeedback(item.poi.name, item.poi.category, 'good', item.poi.tags || [])"
+                      :disabled="getFeedbackState(item.poi.name) !== null"
+                      title="良かった"
+                    >
+                      👍
+                    </button>
+                    <button
+                      :class="['feedback-btn', 'bad', { active: getFeedbackState(item.poi.name) === 'bad' }]"
+                      @click.stop="handleFeedback(item.poi.name, item.poi.category, 'bad', item.poi.tags || [])"
+                      :disabled="getFeedbackState(item.poi.name) !== null"
+                      title="改善希望"
+                    >
+                      👎
+                    </button>
+                  </div>
                 </div>
                 <p v-if="item.poi.description" class="item-description">
                   {{ item.poi.description }}
@@ -109,6 +143,26 @@ const getCategoryLabel = (category: string): string => {
           <div class="accommodation-header">
             <span class="accommodation-icon">🏨</span>
             <span class="accommodation-label">宿泊</span>
+
+            <!-- Feedback buttons for accommodation -->
+            <div v-if="feedbackEnabled" class="feedback-buttons">
+              <button
+                :class="['feedback-btn', 'good', { active: getFeedbackState(day.accommodation.name) === 'good' }]"
+                @click.stop="handleFeedback(day.accommodation.name, 'hotel', 'good', day.accommodation.tags || [])"
+                :disabled="getFeedbackState(day.accommodation.name) !== null"
+                title="良かった"
+              >
+                👍
+              </button>
+              <button
+                :class="['feedback-btn', 'bad', { active: getFeedbackState(day.accommodation.name) === 'bad' }]"
+                @click.stop="handleFeedback(day.accommodation.name, 'hotel', 'bad', day.accommodation.tags || [])"
+                :disabled="getFeedbackState(day.accommodation.name) !== null"
+                title="改善希望"
+              >
+                👎
+              </button>
+            </div>
           </div>
           <div class="accommodation-content">
             <span class="accommodation-name">{{ day.accommodation.name }}</span>
@@ -275,6 +329,7 @@ const getCategoryLabel = (category: string): string => {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.25rem;
+  flex-wrap: wrap;
 }
 
 .item-icon {
@@ -293,6 +348,60 @@ const getCategoryLabel = (category: string): string => {
   background: #ecf0f1;
   padding: 0.1rem 0.4rem;
   border-radius: 3px;
+}
+
+/* Feedback buttons */
+.feedback-buttons {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.feedback-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: #e2e8f0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  opacity: 0.7;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.feedback-btn.good:hover:not(:disabled) {
+  background: #c6f6d5;
+}
+
+.feedback-btn.bad:hover:not(:disabled) {
+  background: #fed7d7;
+}
+
+.feedback-btn.active {
+  opacity: 1;
+}
+
+.feedback-btn.good.active {
+  background: #48bb78;
+  color: white;
+}
+
+.feedback-btn.bad.active {
+  background: #f56565;
+  color: white;
+}
+
+.feedback-btn:disabled:not(.active) {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .item-description {

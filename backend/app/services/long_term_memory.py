@@ -147,7 +147,7 @@ class LongTermMemoryService:
                 PreferenceSignal.tag == tag,
             )
         )
-        existing = result.scalar_one_or_none()
+        existing = result.scalars().first()
 
         if existing:
             # Update existing signal (average weights)
@@ -275,7 +275,7 @@ class LongTermMemoryService:
                         PreferenceSignal.tag == signal_update["tag"],
                     )
                 )
-                signal = result.scalar_one_or_none()
+                signal = result.scalars().first()
                 if signal:
                     await self.remove_signal(db, signal.id)
             elif action == "update":
@@ -286,7 +286,7 @@ class LongTermMemoryService:
                         PreferenceSignal.tag == signal_update["tag"],
                     )
                 )
-                signal = result.scalar_one_or_none()
+                signal = result.scalars().first()
                 if signal:
                     await self.update_signal(
                         db,
@@ -430,7 +430,7 @@ class LongTermMemoryService:
                     PreferenceSignal.tag == removed_tag,
                 )
             )
-            signal = result.scalar_one_or_none()
+            signal = result.scalars().first()
             if signal:
                 await db.execute(
                     delete(PreferenceSignal).where(PreferenceSignal.id == signal.id)

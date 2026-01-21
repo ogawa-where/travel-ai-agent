@@ -76,6 +76,7 @@ class SummarizerAgent:
             tier=ModelTier.LIGHT,  # 要約は軽量モデルで十分
             system_prompt=SYSTEM_PROMPT,
             temperature=0.3,  # 低めの温度で一貫性を保つ
+            agent_name="summarizer",
         )
 
         return response.strip()

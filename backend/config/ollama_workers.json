@@ -1,0 +1,38 @@
+{
+  "workers": [
+    {
+      "host": "172.28.208.213:11434",
+      "role": "heavy",
+      "max_concurrent": 1,
+      "description": "mafu - Control server, primary heavy tasks (Planner, Explainer, ProfileUpdater)"
+    },
+    {
+      "host": "172.28.208.214:11434",
+      "role": "heavy",
+      "max_concurrent": 1,
+      "description": "nubia - Heavy backup"
+    },
+    {
+      "host": "172.28.208.217:11434",
+      "role": "light",
+      "max_concurrent": 2,
+      "description": "qilin - Light tasks (Translator, Summarizer, PreferenceLearner, ExperienceExtractor)"
+    },
+    {
+      "host": "172.28.208.218:11434",
+      "role": "embed",
+      "max_concurrent": 10,
+      "description": "ranco - Embedding tasks (Reranker)"
+    }
+  ],
+  "routing": {
+    "planner": "heavy",
+    "explainer": "heavy",
+    "profile_updater": "heavy",
+    "translator": "light",
+    "summarizer": "light",
+    "preference_learner": "light",
+    "experience_extractor": "light",
+    "reranker": "embed"
+  }
+}

@@ -78,18 +78,23 @@ class VectorStore:
     # 埋め込み生成
     # =========================================================================
 
-    async def generate_embedding(self, text: str) -> list[float]:
+    async def generate_embedding(
+        self,
+        text: str,
+        agent_name: str = "reranker",
+    ) -> list[float]:
         """
         テキストの埋め込みベクトルを生成
 
         Args:
             text: 埋め込むテキスト
+            agent_name: 呼び出し元エージェント名（ルーティング用）
 
         Returns:
             埋め込みベクトル
         """
         try:
-            return await llm_gateway.embed(text)
+            return await llm_gateway.embed(text, agent_name=agent_name)
         except Exception as e:
             logger.error(f"Failed to generate embedding: {e}")
             return []

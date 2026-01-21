@@ -125,6 +125,7 @@ class ProfileUpdaterAgent:
                 tier=ModelTier.HEAVY,  # 複雑な統合タスクはHEAVYモデル
                 system_prompt=SYSTEM_PROMPT,
                 temperature=0.3,
+                agent_name="profile_updater",
             )
 
             # Validate and clean result
@@ -173,6 +174,7 @@ class ProfileUpdaterAgent:
                 tier=ModelTier.HEAVY,
                 system_prompt=SYSTEM_PROMPT,
                 temperature=0.3,
+                agent_name="profile_updater",
             )
 
             return self._validate_feedback_result(result)

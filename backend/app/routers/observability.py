@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.services.llm_gateway import llm_gateway
 from app.services.observability import metrics_collector, trace_viewer
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
@@ -85,6 +86,25 @@ class AllMetricsResponse(BaseModel):
     """全メトリクスレスポンス"""
 
     agents: dict[str, AgentMetricsResponse]
+
+
+class WorkerHealthStatus(BaseModel):
+    """ワーカー健全性ステータス"""
+
+    host: str
+    role: str
+    healthy: bool
+    consecutive_failures: int
+
+
+class LLMHealthResponse(BaseModel):
+    """LLMヘルスチェックレスポンス"""
+
+    healthy: int
+    total: int
+    all_healthy: bool
+    any_healthy: bool
+    workers: list[WorkerHealthStatus]
 
 
 # =============================================================================
@@ -167,3 +187,20 @@ async def get_agent_metrics(agent_name: str):
         "error_rate": metrics.error_count / metrics.call_count if metrics.call_count > 0 else 0,
         "last_called": metrics.last_called.isoformat() if metrics.last_called else None,
     }
+
+
+@router.get("/health/llm", response_model=LLMHealthResponse)
+async def check_llm_health(
+    force: bool = Query(False, description="強制的にヘルスチェックを実行"),
+):
+    """
+    LLMワーカーの健全性をチェック
+
+    - healthy: 健全なワーカー数
+    - total: 総ワーカー数
+    - all_healthy: 全ワーカーが健全か
+    - any_healthy: 1つでも健全なワーカーがあるか
+    - workers: 各ワーカーの詳細ステータス
+    """
+    report = await llm_gateway.check_all_workers(force=force)
+    return report

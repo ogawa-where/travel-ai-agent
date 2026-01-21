@@ -100,14 +100,29 @@ class POIBase(BaseModel):
 
     name: str
     category: POICategory
-    location: str = ""
-    description: str = ""
-    price_range: str = ""  # 例: "¥1,000-2,000"
+    location: str | None = ""
+    description: str | None = ""
+    price_range: str | None = ""  # 例: "¥1,000-2,000"
     duration_minutes: int | None = None  # 所要時間
-    opening_hours: str = ""
+    opening_hours: str | None = ""
     rating: float | None = None
-    tags: list[str] = Field(default_factory=list)
-    source_url: str = ""
+    tags: list[str] | None = Field(default_factory=list)
+    source_url: str | None = ""
+
+    def model_post_init(self, __context) -> None:
+        """None値をデフォルト値に変換"""
+        if self.location is None:
+            object.__setattr__(self, "location", "")
+        if self.description is None:
+            object.__setattr__(self, "description", "")
+        if self.price_range is None:
+            object.__setattr__(self, "price_range", "")
+        if self.opening_hours is None:
+            object.__setattr__(self, "opening_hours", "")
+        if self.tags is None:
+            object.__setattr__(self, "tags", [])
+        if self.source_url is None:
+            object.__setattr__(self, "source_url", "")
 
 
 class POISearchResult(POIBase):
@@ -134,11 +149,22 @@ class POIRanked(POIBase):
 class ItineraryItem(BaseModel):
     """旅程の1項目"""
 
-    time_start: str = ""  # "09:00"
-    time_end: str = ""  # "11:00"
+    time_start: str | None = ""  # "09:00"
+    time_end: str | None = ""  # "11:00"
     poi: POIBase
-    notes: str = ""  # 補足説明
-    travel_from_previous: str = ""  # 前の場所からの移動方法・時間
+    notes: str | None = ""  # 補足説明
+    travel_from_previous: str | None = ""  # 前の場所からの移動方法・時間
+
+    def model_post_init(self, __context) -> None:
+        """None値をデフォルト値に変換"""
+        if self.time_start is None:
+            object.__setattr__(self, "time_start", "")
+        if self.time_end is None:
+            object.__setattr__(self, "time_end", "")
+        if self.notes is None:
+            object.__setattr__(self, "notes", "")
+        if self.travel_from_previous is None:
+            object.__setattr__(self, "travel_from_previous", "")
 
 
 class DayPlan(BaseModel):
@@ -146,19 +172,31 @@ class DayPlan(BaseModel):
 
     day_number: int
     date: str | None = None  # YYYY-MM-DD
-    theme: str = ""  # この日のテーマ
+    theme: str | None = ""  # この日のテーマ
     items: list[ItineraryItem] = Field(default_factory=list)
     accommodation: POIBase | None = None  # 宿泊先
+
+    def model_post_init(self, __context) -> None:
+        """None値をデフォルト値に変換"""
+        if self.theme is None:
+            object.__setattr__(self, "theme", "")
 
 
 class Itinerary(BaseModel):
     """旅程全体"""
 
-    title: str = ""
-    summary: str = ""
+    title: str | None = ""
+    summary: str | None = ""
     days: list[DayPlan] = Field(default_factory=list)
     total_budget_estimate: int | None = None
     highlights: list[str] = Field(default_factory=list)  # ハイライト
+
+    def model_post_init(self, __context) -> None:
+        """None値をデフォルト値に変換"""
+        if self.title is None:
+            object.__setattr__(self, "title", "")
+        if self.summary is None:
+            object.__setattr__(self, "summary", "")
 
 
 # =============================================================================
@@ -337,3 +375,37 @@ class TravelPlanFeedbackResponse(BaseModel):
     updated_signals_count: int
     profile_updated: bool
     message: str = "フィードバックを嗜好に反映しました"
+
+
+# =============================================================================
+# POI フィードバック（👍/👎）
+# =============================================================================
+
+
+class POIFeedbackType(str, Enum):
+    """POIフィードバックの種類"""
+
+    GOOD = "good"  # 👍
+    BAD = "bad"  # 👎
+
+
+class POIFeedbackRequest(BaseModel):
+    """POI単位のフィードバックリクエスト"""
+
+    user_id: str
+    plan_id: str
+    poi_name: str  # POI名
+    poi_category: POICategory  # activity, food, hotel
+    feedback_type: POIFeedbackType  # good or bad
+    poi_tags: list[str] = Field(default_factory=list)  # POIのタグ（嗜好学習用）
+
+
+class POIFeedbackResponse(BaseModel):
+    """POIフィードバックレスポンス"""
+
+    user_id: str
+    plan_id: str
+    poi_name: str
+    feedback_type: POIFeedbackType
+    learned_preference: dict | None = None  # 学習した嗜好（あれば）
+    message: str = "フィードバックを受け付けました"

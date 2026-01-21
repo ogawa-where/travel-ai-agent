@@ -379,7 +379,13 @@ class POICache(Base):
         String(100),
         default="",
     )  # tavily, etc.
-    # 埋め込みベクトル（将来のpgvector用）
+    # 抽出された体験タグ
+    experiences: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=list,
+    )  # ["歴史的建造物巡り", "写真映えスポット", ...]
+    # 体験ベースの埋め込みベクトル
     embedding: Mapped[list | None] = mapped_column(
         JSONB,
         nullable=True,
@@ -387,6 +393,10 @@ class POICache(Base):
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
+    )
+    experiences_extracted_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

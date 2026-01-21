@@ -230,6 +230,7 @@ class PlannerAgent:
                     system_prompt=SYSTEM_PROMPT,
                     temperature=0.7,
                     max_tokens=4096,
+                    agent_name="planner",
                 )
                 return response
             except Exception as e:

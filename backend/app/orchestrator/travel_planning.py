@@ -358,7 +358,8 @@ class TravelPlanningOrchestrator:
                     user_profile_summary=user_profile_summary,
                     preference_signals=preference_signals,
                     wishes=wishes,
-                )
+                ),
+                db=db,  # 体験キャッシュ用にDBセッションを渡す
             )
             ranked[category] = result.ranked_items
 

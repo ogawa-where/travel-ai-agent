@@ -1,13 +1,18 @@
 """
 Rerank Agent
 
-埋め込み類似度ベースでPOIをリランクする。
+体験ベース埋め込み類似度でPOIをリランクする。
 Ollama embedding (nomic-embed-text) を使用。
+
+改善: 場所名ではなく、その場所で得られる「体験」を埋め込み、
+ユーザーの嗜好（体験への好み）とマッチングする。
 """
 
 import asyncio
 import logging
 import math
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.travel_planning import (
     POIRanked,
@@ -22,17 +27,23 @@ logger = logging.getLogger(__name__)
 
 
 class RerankAgent:
-    """埋め込み類似度ベースのリランクエージェント"""
+    """体験ベース埋め込み類似度のリランクエージェント"""
 
     def __init__(self):
         self._embedding_cache: dict[str, list[float]] = {}
+        self._experience_cache: dict[str, list[str]] = {}
 
-    async def rerank(self, input_data: RerankInput) -> RerankOutput:
+    async def rerank(
+        self,
+        input_data: RerankInput,
+        db: AsyncSession | None = None,
+    ) -> RerankOutput:
         """
         POI候補をユーザー嗜好に基づいてリランク
 
         Args:
             input_data: リランク入力（候補、プロフィール、嗜好）
+            db: データベースセッション（体験キャッシュ用、省略可）
 
         Returns:
             ランク付けされたPOIリスト
@@ -40,7 +51,11 @@ class RerankAgent:
         if not input_data.candidates:
             return RerankOutput(ranked_items=[])
 
-        # ユーザー嗜好を表すテキストを構築
+        # 体験キャッシュサービスを使用（db がある場合）
+        if db:
+            await self._prefetch_experiences(db, input_data.candidates)
+
+        # ユーザー嗜好を表すテキストを構築（体験ベース）
         preference_text = self._build_preference_text(
             input_data.user_profile_summary,
             input_data.preference_signals,
@@ -50,11 +65,12 @@ class RerankAgent:
         # 嗜好テキストの埋め込みを取得
         preference_embedding = await self._get_embedding(preference_text)
 
-        # 各候補の埋め込みを取得してスコアリング
+        # 各候補の埋め込みを取得してスコアリング（体験ベース）
         ranked_items = await self._score_candidates(
             input_data.candidates,
             preference_embedding,
             input_data.wishes,
+            db,
         )
 
         # スコア順にソート
@@ -66,6 +82,23 @@ class RerankAgent:
         )
 
         return RerankOutput(ranked_items=ranked_items)
+
+    async def _prefetch_experiences(
+        self,
+        db: AsyncSession,
+        candidates: list[POISearchResult],
+    ) -> None:
+        """POIの体験を事前取得してキャッシュ"""
+        from app.services.poi_cache import poi_cache_service
+
+        try:
+            experiences_map = await poi_cache_service.get_experiences_for_pois(
+                db, candidates
+            )
+            self._experience_cache.update(experiences_map)
+            logger.info(f"Prefetched experiences for {len(experiences_map)} POIs")
+        except Exception as e:
+            logger.warning(f"Failed to prefetch experiences: {e}")
 
     def _build_preference_text(
         self,
@@ -109,7 +142,7 @@ class RerankAgent:
             return self._embedding_cache[cache_key]
 
         try:
-            embedding = await llm_gateway.embed(text)
+            embedding = await llm_gateway.embed(text, agent_name="reranker")
             self._embedding_cache[cache_key] = embedding
             return embedding
         except Exception as e:
@@ -122,14 +155,23 @@ class RerankAgent:
         candidates: list[POISearchResult],
         preference_embedding: list[float],
         wishes: TravelWishes,
+        db: AsyncSession | None = None,
     ) -> list[POIRanked]:
-        """候補をスコアリング"""
+        """候補をスコアリング（体験ベース）"""
         ranked_items = []
 
-        # 候補の埋め込みを並列で取得
-        candidate_texts = [
-            f"{c.name} {c.description} {' '.join(c.tags)}" for c in candidates
-        ]
+        # 候補の埋め込みテキストを構築（体験ベース）
+        candidate_texts = []
+        for c in candidates:
+            # キャッシュから体験を取得
+            experiences = self._experience_cache.get(c.name, [])
+            if experiences:
+                # 体験ベースのテキスト（場所名を含まない）
+                text = " ".join(experiences)
+            else:
+                # フォールバック: 説明とタグから体験的な要素を抽出
+                text = f"{c.description} {' '.join(c.tags or [])}"
+            candidate_texts.append(text)
 
         embeddings = await asyncio.gather(
             *[self._get_embedding(text) for text in candidate_texts],

@@ -183,6 +183,7 @@ class ExplainerAgent:
                     system_prompt=SYSTEM_PROMPT,
                     temperature=0.7,
                     max_tokens=2048,
+                    agent_name="explainer",
                 )
                 return response
             except Exception as e:

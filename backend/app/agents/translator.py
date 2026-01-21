@@ -128,6 +128,7 @@ class TranslatorAgent:
                     tier=ModelTier.LIGHT,
                     system_prompt=SYSTEM_PROMPT,
                     temperature=0.3,
+                    agent_name="translator",
                 )
                 return response
             except Exception as e:

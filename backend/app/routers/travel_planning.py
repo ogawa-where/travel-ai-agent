@@ -9,9 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.domain.models import TravelPlan, TravelPlanRequest, User
+from app.domain.models import PreferenceSignal, TravelPlan, TravelPlanRequest, User
 from app.orchestrator.travel_planning import travel_orchestrator
 from app.schemas.travel_planning import (
+    POIFeedbackRequest,
+    POIFeedbackResponse,
+    POIFeedbackType,
     TravelChatRequest,
     TravelChatResponse,
     TravelPlanFeedbackRequest,
@@ -20,6 +23,7 @@ from app.schemas.travel_planning import (
     TravelPlanRequestResponse,
     TravelPlanResponse,
 )
+from app.services.experience_extractor import experience_extractor
 from app.services.long_term_memory import long_term_memory
 from app.services.session_manager import session_manager
 
@@ -385,4 +389,172 @@ async def submit_feedback(
         plan_id=plan_id,
         updated_signals_count=len(feedback_result.get("updated_signals", [])),
         profile_updated=bool(feedback_result.get("profile_update")),
+    )
+
+
+@router.post("/poi-feedback", response_model=POIFeedbackResponse)
+async def submit_poi_feedback(
+    request: POIFeedbackRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> POIFeedbackResponse:
+    """
+    POI単位のフィードバック（👍/👎）を送信し、嗜好に反映
+
+    POIごとの評価から嗜好シグナルを生成・更新します。
+    """
+    user_id = request.user_id
+    plan_id = request.plan_id
+    poi_name = request.poi_name
+    poi_category = request.poi_category
+    feedback_type = request.feedback_type
+    poi_tags = request.poi_tags
+
+    # ユーザーを確認
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.preference_signals))
+        .where(User.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # プランを確認
+    result = await db.execute(select(TravelPlan).where(TravelPlan.id == plan_id))
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    # フィードバックから嗜好シグナルを生成
+    learned_preference = None
+
+    # カテゴリに基づくシグナルを作成
+    category_map = {
+        "activity": "体験・観光",
+        "food": "食事",
+        "hotel": "宿泊",
+    }
+    category_label = category_map.get(poi_category.value, poi_category.value)
+
+    if feedback_type == POIFeedbackType.GOOD:
+        # 👍 → likes に追加
+        signal_category = "likes"
+        weight = 0.8
+        evidence = f"{poi_name}（{category_label}）を高評価"
+    else:
+        # 👎 → dislikes に追加
+        signal_category = "dislikes"
+        weight = 0.7
+        evidence = f"{poi_name}（{category_label}）を低評価"
+
+    # POI名をタグとして保存
+    signal_tag = poi_name
+
+    # 既存シグナルをチェック
+    existing_signal = None
+    for s in user.preference_signals or []:
+        if s.tag == signal_tag and s.category == signal_category:
+            existing_signal = s
+            break
+
+    if existing_signal:
+        # 既存シグナルを更新（重みを増加）
+        new_weight = min(existing_signal.weight + 0.1, 1.0)
+        existing_signal.weight = new_weight
+        existing_signal.evidence = evidence
+        learned_preference = {
+            "category": signal_category,
+            "tag": signal_tag,
+            "weight": new_weight,
+            "is_new": False,
+        }
+    else:
+        # 新規シグナルを作成
+        signal = PreferenceSignal(
+            user_id=user_id,
+            category=signal_category,
+            tag=signal_tag,
+            weight=weight,
+            evidence=evidence,
+            extra_data={"poi_category": poi_category.value, "tags": poi_tags},
+        )
+        db.add(signal)
+        learned_preference = {
+            "category": signal_category,
+            "tag": signal_tag,
+            "weight": weight,
+            "is_new": True,
+        }
+
+    # POIのタグからも嗜好を学習（goodの場合のみ）
+    if feedback_type == POIFeedbackType.GOOD and poi_tags:
+        for tag in poi_tags[:3]:  # 最大3つまで
+            tag_signal = None
+            for s in user.preference_signals or []:
+                if s.tag == tag and s.category == "likes":
+                    tag_signal = s
+                    break
+
+            if tag_signal:
+                tag_signal.weight = min(tag_signal.weight + 0.05, 1.0)
+            else:
+                new_signal = PreferenceSignal(
+                    user_id=user_id,
+                    category="likes",
+                    tag=tag,
+                    weight=0.5,
+                    evidence=f"{poi_name}のタグから学習",
+                )
+                db.add(new_signal)
+
+    # LLMを使って体験の本質を抽出し、嗜好に反映
+    try:
+        experiences = await experience_extractor.extract_experiences(
+            poi_name=poi_name,
+            poi_category=poi_category.value,
+            poi_tags=poi_tags,
+            feedback_type=feedback_type.value,
+        )
+
+        experience_category = "likes" if feedback_type == POIFeedbackType.GOOD else "dislikes"
+
+        for exp in experiences:
+            # 既存シグナルをチェック
+            exp_signal = None
+            for s in user.preference_signals or []:
+                if s.tag == exp.tag and s.category == experience_category:
+                    exp_signal = s
+                    break
+
+            if exp_signal:
+                # 既存シグナルを更新（重みを増加）
+                exp_signal.weight = min(exp_signal.weight + 0.1, 1.0)
+                exp_signal.evidence = f"{poi_name}から抽出: {exp.reason}"
+            else:
+                # 新規シグナルを作成
+                new_exp_signal = PreferenceSignal(
+                    user_id=user_id,
+                    category=experience_category,
+                    tag=exp.tag,
+                    weight=exp.weight * 0.8,  # 抽出された体験は少し低めの重みで
+                    evidence=f"{poi_name}から抽出: {exp.reason}",
+                    extra_data={"source": "experience_extraction", "poi": poi_name},
+                )
+                db.add(new_exp_signal)
+
+        logger.info(f"Extracted {len(experiences)} experiences from {poi_name}")
+
+    except Exception as e:
+        # 体験抽出に失敗してもフィードバック処理は継続
+        logger.warning(f"Experience extraction failed for {poi_name}: {e}")
+
+    await db.commit()
+
+    return POIFeedbackResponse(
+        user_id=user_id,
+        plan_id=plan_id,
+        poi_name=poi_name,
+        feedback_type=feedback_type,
+        learned_preference=learned_preference,
+        message=f"「{poi_name}」への{'高' if feedback_type == POIFeedbackType.GOOD else '低'}評価を学習しました",
     )

@@ -1,7 +1,12 @@
 """
 LLM Gateway
 
-CLAUDE.md セクション8.7に基づくエラーハンドリング:
+CLAUDE.md セクション8に基づく役割ベースルーティング:
+- Heavy (mafu, nubia): Planner, Explainer
+- Light (qilin): Translator, Summarizer, PreferenceLearner, ProfileUpdater
+- Embed (ranco): Reranker, ExperienceExtractor
+
+エラーハンドリング (セクション8.7):
 - LLM出力パース失敗: 最大3回リトライ
 - Ollamaワーカー全滅時: ユーザーフレンドリーなエラー
 - ヘルスチェック機能
@@ -10,10 +15,12 @@ CLAUDE.md セクション8.7に基づくエラーハンドリング:
 import asyncio
 import json
 import logging
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+from pathlib import Path
 
 import httpx
 from pydantic_settings import BaseSettings
@@ -33,10 +40,17 @@ class ModelTier(str, Enum):
     EMBED = "embed"
 
 
+class WorkerRole(str, Enum):
+    HEAVY = "heavy"
+    LIGHT = "light"
+    EMBED = "embed"
+    ANY = "any"  # どの役割でも可
+
+
 class Settings(BaseSettings):
     ollama_workers: str = "localhost:11434"
-    ollama_model_heavy: str = "qwen2.5-bakeneko-32b-instruct-v2"
-    ollama_model_light: str = "okamototk/llama-swallow:8b"
+    ollama_model_heavy: str = "qwen2.5:32b-instruct"
+    ollama_model_light: str = "llama-swallow:8b"
     ollama_model_embed: str = "nomic-embed-text"
     llm_max_retries: int = 3
     llm_timeout: int = 120
@@ -51,18 +65,37 @@ settings = Settings()
 # ヘルスチェック間隔
 HEALTH_CHECK_INTERVAL_SECONDS = 30
 
+# エージェント名から役割へのマッピング
+# 注意: モデルティアとワーカー役割を一致させる
+# - HEAVY モデル使用 → HEAVY ワーカー
+# - LIGHT モデル使用 → LIGHT ワーカー
+# - EMBED モデル使用 → EMBED ワーカー
+AGENT_ROLE_MAPPING = {
+    "planner": WorkerRole.HEAVY,
+    "explainer": WorkerRole.HEAVY,
+    "profile_updater": WorkerRole.HEAVY,  # 複雑な統合タスクはHEAVYモデル使用
+    "translator": WorkerRole.LIGHT,
+    "summarizer": WorkerRole.LIGHT,
+    "preference_learner": WorkerRole.LIGHT,
+    "experience_extractor": WorkerRole.LIGHT,  # JSON生成はLIGHTモデル使用
+    "reranker": WorkerRole.EMBED,
+}
+
 
 @dataclass
 class Worker:
     host: str
+    role: WorkerRole = WorkerRole.ANY
+    max_concurrent: int = 1
     healthy: bool = True
     semaphore: asyncio.Semaphore | None = None
     last_health_check: datetime | None = None
     consecutive_failures: int = 0
+    _current_load: int = field(default=0, repr=False)
 
     def __post_init__(self):
         if self.semaphore is None:
-            self.semaphore = asyncio.Semaphore(1)
+            self.semaphore = asyncio.Semaphore(self.max_concurrent)
 
     def needs_health_check(self) -> bool:
         """ヘルスチェックが必要かどうか"""
@@ -89,18 +122,116 @@ class Worker:
 class LLMGateway:
     def __init__(self):
         self.workers: list[Worker] = []
+        self._worker_indices: dict[WorkerRole, int] = {
+            WorkerRole.HEAVY: 0,
+            WorkerRole.LIGHT: 0,
+            WorkerRole.EMBED: 0,
+            WorkerRole.ANY: 0,
+        }
         self._initialize_workers()
-        self._current_worker_index = 0
 
     def _initialize_workers(self):
+        """ワーカーを初期化（設定ファイルまたは環境変数から）"""
+        # 設定ファイルを探す
+        config_paths = [
+            Path("config/ollama_workers.json"),
+            Path("/app/config/ollama_workers.json"),
+        ]
+
+        config_loaded = False
+        for config_path in config_paths:
+            if config_path.exists():
+                try:
+                    with open(config_path) as f:
+                        config = json.load(f)
+                    self._load_from_config(config)
+                    config_loaded = True
+                    logger.info(f"Loaded worker config from {config_path}")
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to load config from {config_path}: {e}")
+
+        if not config_loaded:
+            # 環境変数から読み込み
+            self._load_from_env()
+
+        if not self.workers:
+            self.workers.append(Worker(host="localhost:11434", role=WorkerRole.ANY))
+
+        # ワーカー情報をログ出力
+        for w in self.workers:
+            logger.info(f"Worker: {w.host}, role={w.role.value}, max_concurrent={w.max_concurrent}")
+
+    def _load_from_config(self, config: dict):
+        """設定ファイルからワーカーを読み込み"""
+        workers_config = config.get("workers", [])
+        for wc in workers_config:
+            host = wc.get("host", "")
+            if not host:
+                continue
+
+            role_str = wc.get("role", "any")
+            try:
+                role = WorkerRole(role_str)
+            except ValueError:
+                role = WorkerRole.ANY
+
+            max_concurrent = wc.get("max_concurrent", 1)
+
+            self.workers.append(Worker(
+                host=host,
+                role=role,
+                max_concurrent=max_concurrent,
+            ))
+
+        # ルーティング設定を更新
+        routing = config.get("routing", {})
+        for agent_name, role_str in routing.items():
+            try:
+                role = WorkerRole(role_str)
+                AGENT_ROLE_MAPPING[agent_name] = role
+            except ValueError:
+                pass
+
+    def _load_from_env(self):
+        """環境変数からワーカーを読み込み"""
         worker_hosts = settings.ollama_workers.split(",")
+
+        # 役割ごとのワーカー設定を環境変数から取得
+        heavy_workers = os.getenv("OLLAMA_WORKER_HEAVY", "").split(",")
+        light_workers = os.getenv("OLLAMA_WORKER_LIGHT", "").split(",")
+        embed_workers = os.getenv("OLLAMA_WORKER_EMBED", "").split(",")
+
+        heavy_set = {h.strip() for h in heavy_workers if h.strip()}
+        light_set = {h.strip() for h in light_workers if h.strip()}
+        embed_set = {h.strip() for h in embed_workers if h.strip()}
+
         for host in worker_hosts:
             host = host.strip()
-            if host:
-                self.workers.append(Worker(host=host))
-        if not self.workers:
-            self.workers.append(Worker(host="localhost:11434"))
-        logger.info(f"Initialized {len(self.workers)} Ollama workers")
+            if not host:
+                continue
+
+            # 役割を判定
+            if host in heavy_set:
+                role = WorkerRole.HEAVY
+                max_concurrent = 1
+            elif host in light_set:
+                role = WorkerRole.LIGHT
+                max_concurrent = 2
+            elif host in embed_set:
+                role = WorkerRole.EMBED
+                max_concurrent = 10
+            else:
+                role = WorkerRole.ANY
+                max_concurrent = 1
+
+            self.workers.append(Worker(
+                host=host,
+                role=role,
+                max_concurrent=max_concurrent,
+            ))
+
+        logger.info(f"Initialized {len(self.workers)} Ollama workers from env")
 
     def _get_model_name(self, tier: ModelTier) -> str:
         if tier == ModelTier.HEAVY:
@@ -111,25 +242,55 @@ class LLMGateway:
             return settings.ollama_model_embed
         return settings.ollama_model_light
 
-    def _select_worker(self, exclude: set[str] | None = None) -> Worker | None:
+    def get_role_for_agent(self, agent_name: str) -> WorkerRole:
+        """エージェント名から必要な役割を取得"""
+        return AGENT_ROLE_MAPPING.get(agent_name.lower(), WorkerRole.ANY)
+
+    def _select_worker(
+        self,
+        role: WorkerRole = WorkerRole.ANY,
+        exclude: set[str] | None = None,
+    ) -> Worker | None:
         """
-        ラウンドロビンでワーカーを選択
+        役割に基づいてワーカーを選択（ラウンドロビン）
 
         Args:
+            role: 必要な役割
             exclude: 除外するワーカーホストのセット
 
         Returns:
             選択されたワーカー、なければNone
         """
         exclude = exclude or set()
-        healthy_workers = [
+
+        # 指定された役割のワーカーを優先
+        candidates = [
             w for w in self.workers
-            if w.healthy and w.host not in exclude
+            if w.healthy and w.host not in exclude and (w.role == role or role == WorkerRole.ANY)
         ]
-        if not healthy_workers:
+
+        # 見つからない場合は ANY 役割のワーカーを探す
+        if not candidates and role != WorkerRole.ANY:
+            candidates = [
+                w for w in self.workers
+                if w.healthy and w.host not in exclude and w.role == WorkerRole.ANY
+            ]
+
+        # それでも見つからない場合は全ワーカーから探す（フェイルオーバー）
+        if not candidates:
+            candidates = [
+                w for w in self.workers
+                if w.healthy and w.host not in exclude
+            ]
+
+        if not candidates:
             return None
-        worker = healthy_workers[self._current_worker_index % len(healthy_workers)]
-        self._current_worker_index += 1
+
+        # ラウンドロビンで選択
+        index = self._worker_indices.get(role, 0)
+        worker = candidates[index % len(candidates)]
+        self._worker_indices[role] = index + 1
+
         return worker
 
     async def health_check(self, worker: Worker, force: bool = False) -> bool:
@@ -184,6 +345,7 @@ class LLMGateway:
             "workers": [
                 {
                     "host": w.host,
+                    "role": w.role.value,
                     "healthy": w.healthy,
                     "consecutive_failures": w.consecutive_failures,
                 }
@@ -205,6 +367,7 @@ class LLMGateway:
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        agent_name: str | None = None,
     ) -> str:
         """
         Ollamaを使用してテキストを生成
@@ -215,6 +378,7 @@ class LLMGateway:
             system_prompt: システムプロンプト
             temperature: 温度
             max_tokens: 最大トークン数
+            agent_name: エージェント名（役割ベースルーティング用）
 
         Returns:
             生成されたテキスト
@@ -223,15 +387,22 @@ class LLMGateway:
             LLMUnavailableError: ワーカーが利用不可
             LLMGenerationError: 生成失敗
         """
+        # エージェント名から役割を取得
+        if agent_name:
+            role = self.get_role_for_agent(agent_name)
+        else:
+            # ティアから役割を推定
+            role = WorkerRole(tier.value)
+
         # まず健全なワーカーがあるか確認
-        worker = self._select_worker()
+        worker = self._select_worker(role=role)
         if not worker:
             # 全ワーカーをチェックしてみる
             await self.check_all_workers(force=True)
-            worker = self._select_worker()
+            worker = self._select_worker(role=role)
             if not worker:
                 raise LLMUnavailableError(
-                    details={"workers": [w.host for w in self.workers]}
+                    details={"workers": [w.host for w in self.workers], "required_role": role.value}
                 )
 
         model = self._get_model_name(tier)
@@ -256,10 +427,10 @@ class LLMGateway:
         for attempt in range(settings.llm_max_retries):
             # ワーカーが変わった可能性があるので再選択
             if attempt > 0:
-                worker = self._select_worker(exclude=tried_workers)
+                worker = self._select_worker(role=role, exclude=tried_workers)
                 if not worker:
                     # 除外なしで再選択
-                    worker = self._select_worker()
+                    worker = self._select_worker(role=role)
                     if not worker:
                         break
 
@@ -286,6 +457,7 @@ class LLMGateway:
 
                         logger.info(
                             f"LLM generate: model={model}, worker={worker.host}, "
+                            f"role={role.value}, agent={agent_name or 'unknown'}, "
                             f"latency={elapsed:.2f}s, tokens={len(content.split())}"
                         )
                         return content
@@ -328,6 +500,7 @@ class LLMGateway:
         tier: ModelTier = ModelTier.LIGHT,
         system_prompt: str | None = None,
         temperature: float = 0.3,
+        agent_name: str | None = None,
     ) -> dict:
         """
         JSON出力を生成（パース失敗時にリトライ）
@@ -339,6 +512,7 @@ class LLMGateway:
             tier: モデルティア
             system_prompt: システムプロンプト
             temperature: 温度
+            agent_name: エージェント名（役割ベースルーティング用）
 
         Returns:
             パースされたJSON辞書
@@ -362,6 +536,7 @@ class LLMGateway:
                     tier=tier,
                     system_prompt=json_system,
                     temperature=temperature,
+                    agent_name=agent_name,
                 )
                 raw_responses.append(response)
 
@@ -447,12 +622,17 @@ class LLMGateway:
 
         return None
 
-    async def embed(self, text: str) -> list[float]:
+    async def embed(
+        self,
+        text: str,
+        agent_name: str | None = None,
+    ) -> list[float]:
         """
         Ollamaを使用してエンベディングを生成
 
         Args:
             text: 埋め込むテキスト
+            agent_name: エージェント名（役割ベースルーティング用）
 
         Returns:
             エンベディングベクトル
@@ -461,14 +641,20 @@ class LLMGateway:
             LLMUnavailableError: ワーカーが利用不可
             LLMGenerationError: 生成失敗
         """
-        worker = self._select_worker()
+        # 埋め込みは常に EMBED 役割のワーカーを使用
+        role = WorkerRole.EMBED
+
+        worker = self._select_worker(role=role)
         if not worker:
             await self.check_all_workers(force=True)
-            worker = self._select_worker()
+            worker = self._select_worker(role=role)
             if not worker:
-                raise LLMUnavailableError(
-                    details={"workers": [w.host for w in self.workers]}
-                )
+                # フォールバック: 任意のワーカーを使用
+                worker = self._select_worker(role=WorkerRole.ANY)
+                if not worker:
+                    raise LLMUnavailableError(
+                        details={"workers": [w.host for w in self.workers]}
+                    )
 
         model = self._get_model_name(ModelTier.EMBED)
         payload = {
@@ -477,7 +663,11 @@ class LLMGateway:
         }
 
         last_error = None
+        tried_workers = set()
+
         for attempt in range(settings.llm_max_retries):
+            tried_workers.add(worker.host)
+
             try:
                 async with worker.semaphore:
                     start_time = time.time()
@@ -496,6 +686,7 @@ class LLMGateway:
 
                         logger.info(
                             f"LLM embed: model={model}, worker={worker.host}, "
+                            f"agent={agent_name or 'unknown'}, "
                             f"latency={elapsed:.2f}s, dims={len(embedding)}"
                         )
                         return embedding
@@ -508,15 +699,20 @@ class LLMGateway:
                 )
                 if attempt < settings.llm_max_retries - 1:
                     # 別のワーカーを試す
-                    new_worker = self._select_worker(exclude={worker.host})
+                    new_worker = self._select_worker(role=role, exclude=tried_workers)
                     if new_worker:
                         worker = new_worker
+                    else:
+                        # フォールバック
+                        new_worker = self._select_worker(role=WorkerRole.ANY, exclude=tried_workers)
+                        if new_worker:
+                            worker = new_worker
                     await asyncio.sleep(0.5)
 
         raise LLMGenerationError(
             message=f"Embedding generation failed: {last_error}",
             attempts=settings.llm_max_retries,
-            details={"last_error": str(last_error)},
+            details={"last_error": str(last_error), "tried_workers": list(tried_workers)},
         )
 
 

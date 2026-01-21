@@ -1,13 +1,10 @@
 <script setup lang="ts">
-type AppMode = 'preference' | 'travel'
-
 defineProps<{
-  currentMode: AppMode
-  modeTitle: string
+  profileSummary: string
 }>()
 
 const emit = defineEmits<{
-  switchMode: [mode: AppMode]
+  showProfile: []
   reset: []
 }>()
 </script>
@@ -15,25 +12,23 @@ const emit = defineEmits<{
 <template>
   <header class="header">
     <div class="header-content">
-      <div>
-        <h1>Travel AI Agent</h1>
-        <p>{{ modeTitle }}</p>
+      <div class="header-brand">
+        <h1>Travel AI</h1>
+        <p>あなたの旅をサポート</p>
       </div>
       <div class="header-actions">
-        <div class="mode-switcher">
-          <button
-            :class="['mode-btn', { active: currentMode === 'preference' }]"
-            @click="emit('switchMode', 'preference')"
-          >
-            嗜好学習
-          </button>
-          <button
-            :class="['mode-btn', { active: currentMode === 'travel' }]"
-            @click="emit('switchMode', 'travel')"
-          >
-            旅行企画
-          </button>
-        </div>
+        <button
+          class="profile-btn"
+          @click="emit('showProfile')"
+          title="プロフィールを見る"
+          :class="{ 'has-profile': profileSummary }"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+          <span>プロフィール</span>
+        </button>
         <button class="reset-btn" @click="emit('reset')" title="新しいユーザーとして開始">
           リセット
         </button>
@@ -44,9 +39,10 @@ const emit = defineEmits<{
 
 <style scoped>
 .header {
-  background: #2c3e50;
+  background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
   color: white;
   padding: 1rem 2rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
 }
 
 .header-content {
@@ -57,51 +53,56 @@ const emit = defineEmits<{
   margin: 0 auto;
 }
 
-.header h1 {
+.header-brand h1 {
   margin: 0;
   font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
 }
 
-.header p {
+.header-brand p {
   margin: 0.25rem 0 0;
   opacity: 0.8;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
-.mode-switcher {
+.profile-btn {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
-}
-
-.mode-btn {
   padding: 0.5rem 1rem;
   border: 1px solid rgba(255, 255, 255, 0.3);
   background: transparent;
   color: white;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   transition: all 0.2s;
 }
 
-.mode-btn:hover {
+.profile-btn:hover {
   background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
-.mode-btn.active {
-  background: white;
-  color: #2c3e50;
+.profile-btn.has-profile {
+  background: rgba(72, 187, 120, 0.2);
+  border-color: rgba(72, 187, 120, 0.5);
+}
+
+.profile-btn.has-profile:hover {
+  background: rgba(72, 187, 120, 0.3);
 }
 
 .reset-btn {
   padding: 0.5rem 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: rgba(255, 255, 255, 0.7);
   border-radius: 6px;

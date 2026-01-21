@@ -109,6 +109,7 @@ class PreferenceLearnerAgent:
             tier=ModelTier.LIGHT,
             system_prompt=SYSTEM_PROMPT,
             temperature=0.7,
+            agent_name="preference_learner",
         )
         return response.strip()
 
@@ -129,6 +130,7 @@ class PreferenceLearnerAgent:
                 tier=ModelTier.LIGHT,
                 system_prompt=SYSTEM_PROMPT,
                 temperature=0.3,
+                agent_name="preference_learner",
             )
             # Validate signals
             validated_signals = []
@@ -181,6 +183,7 @@ class PreferenceLearnerAgent:
             tier=ModelTier.LIGHT,
             system_prompt=SYSTEM_PROMPT,
             temperature=0.5,
+            agent_name="preference_learner",
         )
         return response.strip()
 
@@ -194,6 +197,7 @@ class PreferenceLearnerAgent:
             tier=ModelTier.LIGHT,
             system_prompt=SYSTEM_PROMPT,
             temperature=0.8,
+            agent_name="preference_learner",
         )
         return response.strip()
 

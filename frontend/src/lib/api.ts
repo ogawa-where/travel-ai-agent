@@ -132,6 +132,37 @@ interface TravelFeedbackResponse {
   message: string
 }
 
+// 統合チャット用インターフェース
+interface LearnedPreference {
+  category: string
+  tag: string
+  weight: number
+  is_new: boolean
+}
+
+interface UnifiedChatResponse {
+  user_id: string
+  session_id: string
+  assistant_message: string
+  intent: 'travel_planning' | 'general_chat'
+  learned_preferences: LearnedPreference[]
+  plan: TravelPlan | null
+  plan_status: string | null
+}
+
+// POIフィードバック用インターフェース
+type POIFeedbackType = 'good' | 'bad'
+type POICategory = 'activity' | 'food' | 'hotel'
+
+interface POIFeedbackResponse {
+  user_id: string
+  plan_id: string
+  poi_name: string
+  feedback_type: POIFeedbackType
+  learned_preference: LearnedPreference | null
+  message: string
+}
+
 export const api = {
   async healthCheck(): Promise<HealthResponse> {
     const response = await fetchWithErrorHandling(`${API_BASE_URL}/health`)
@@ -234,6 +265,55 @@ export const api = {
     })
     return response.json()
   },
+
+  // 統合チャット
+  async startUnifiedChat(userId: string): Promise<UnifiedChatResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/chat/start?user_id=${userId}`, {
+      method: 'POST',
+    })
+    return response.json()
+  },
+
+  async sendUnifiedMessage(userId: string, message: string, sessionId?: string): Promise<UnifiedChatResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        message: message,
+        session_id: sessionId,
+      }),
+    })
+    return response.json()
+  },
+
+  // POIフィードバック
+  async sendPOIFeedback(
+    userId: string,
+    planId: string,
+    poiName: string,
+    poiCategory: POICategory,
+    feedbackType: POIFeedbackType,
+    poiTags: string[] = []
+  ): Promise<POIFeedbackResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/poi-feedback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        plan_id: planId,
+        poi_name: poiName,
+        poi_category: poiCategory,
+        feedback_type: feedbackType,
+        poi_tags: poiTags,
+      }),
+    })
+    return response.json()
+  },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse }
