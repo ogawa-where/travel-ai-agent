@@ -21,6 +21,27 @@ interface HealthResponse {
   status: string
 }
 
+interface LoginResponse {
+  user: User
+  is_new_user: boolean
+  message: string
+}
+
+interface WorkerHealth {
+  host: string
+  role: string
+  healthy: boolean
+  consecutive_failures: number
+}
+
+interface LLMHealthResponse {
+  healthy: number
+  total: number
+  all_healthy: boolean
+  any_healthy: boolean
+  workers: WorkerHealth[]
+}
+
 interface PreferenceSignal {
   id: string
   user_id: string
@@ -42,6 +63,7 @@ interface UserProfile {
 
 interface User {
   id: string
+  username: string | null
   created_at: string
   updated_at: string
   profile: UserProfile | null
@@ -163,9 +185,67 @@ interface POIFeedbackResponse {
   message: string
 }
 
+// カテゴリ別検索用インターフェース
+interface POISearchResult {
+  name: string
+  category: POICategory
+  location: string
+  description: string
+  price_range: string
+  duration_minutes: number | null
+  opening_hours: string
+  rating: number | null
+  tags: string[]
+  source_url: string
+  relevance_score: number
+  source_name: string
+}
+
+interface CategorySearchRequest {
+  destination: string
+  keywords?: string[]
+  constraints?: Record<string, unknown>
+}
+
+interface CategorySearchResponse {
+  category: POICategory
+  destination: string
+  items: POISearchResult[]
+  total_count: number
+  search_time_ms: number
+  source: string
+}
+
+interface AllCategorySearchResults {
+  activity: CategorySearchResponse | null
+  food: CategorySearchResponse | null
+  hotel: CategorySearchResponse | null
+}
+
 export const api = {
   async healthCheck(): Promise<HealthResponse> {
     const response = await fetchWithErrorHandling(`${API_BASE_URL}/health`)
+    return response.json()
+  },
+
+  async getLLMHealth(force: boolean = false): Promise<LLMHealthResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/observability/health/llm?force=${force}`)
+    return response.json()
+  },
+
+  async login(username: string): Promise<LoginResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ username }),
+    })
+    return response.json()
+  },
+
+  async checkUsername(username: string): Promise<{ exists: boolean }> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/auth/check/${encodeURIComponent(username)}`)
     return response.json()
   },
 
@@ -314,6 +394,55 @@ export const api = {
     })
     return response.json()
   },
+
+  // カテゴリ別検索
+  async searchActivities(request: CategorySearchRequest): Promise<CategorySearchResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/search/activity`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+    return response.json()
+  },
+
+  async searchFoods(request: CategorySearchRequest): Promise<CategorySearchResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/search/food`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+    return response.json()
+  },
+
+  async searchHotels(request: CategorySearchRequest): Promise<CategorySearchResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/search/hotel`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+    return response.json()
+  },
+
+  // 全カテゴリ並列検索
+  async searchAllCategories(request: CategorySearchRequest): Promise<AllCategorySearchResults> {
+    const [activity, food, hotel] = await Promise.allSettled([
+      this.searchActivities(request),
+      this.searchFoods(request),
+      this.searchHotels(request),
+    ])
+
+    return {
+      activity: activity.status === 'fulfilled' ? activity.value : null,
+      food: food.status === 'fulfilled' ? food.value : null,
+      hotel: hotel.status === 'fulfilled' ? hotel.value : null,
+    }
+  },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults }

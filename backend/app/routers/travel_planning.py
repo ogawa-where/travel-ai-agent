@@ -12,9 +12,13 @@ from app.database import get_db
 from app.domain.models import PreferenceSignal, TravelPlan, TravelPlanRequest, User
 from app.orchestrator.travel_planning import travel_orchestrator
 from app.schemas.travel_planning import (
+    CategorySearchRequest,
+    CategorySearchResponse,
+    POICategory,
     POIFeedbackRequest,
     POIFeedbackResponse,
     POIFeedbackType,
+    SearchQuery,
     TravelChatRequest,
     TravelChatResponse,
     TravelPlanFeedbackRequest,
@@ -22,6 +26,11 @@ from app.schemas.travel_planning import (
     TravelPlanRequestCreate,
     TravelPlanRequestResponse,
     TravelPlanResponse,
+)
+from app.agents.search_agents import (
+    activity_search_agent,
+    food_search_agent,
+    hotel_search_agent,
 )
 from app.services.experience_extractor import experience_extractor
 from app.services.long_term_memory import long_term_memory
@@ -557,4 +566,93 @@ async def submit_poi_feedback(
         feedback_type=feedback_type,
         learned_preference=learned_preference,
         message=f"「{poi_name}」への{'高' if feedback_type == POIFeedbackType.GOOD else '低'}評価を学習しました",
+    )
+
+
+# =============================================================================
+# 個別検索エンドポイント（フロントエンド並列呼び出し用）
+# =============================================================================
+
+
+@router.post("/search/activity", response_model=CategorySearchResponse)
+async def search_activities(
+    request: CategorySearchRequest,
+) -> CategorySearchResponse:
+    """
+    アクティビティ・観光地を検索
+
+    体験、観光スポット、名所などを検索します。
+    """
+    query = SearchQuery(
+        category=POICategory.ACTIVITY,
+        destination=request.destination,
+        keywords=request.keywords if request.keywords else ["観光", "体験", "名所"],
+        constraints=request.constraints,
+    )
+
+    result = await activity_search_agent.search(query)
+
+    return CategorySearchResponse(
+        category=POICategory.ACTIVITY,
+        destination=request.destination,
+        items=result.items,
+        total_count=len(result.items),
+        search_time_ms=result.search_time_ms,
+        source=result.source,
+    )
+
+
+@router.post("/search/food", response_model=CategorySearchResponse)
+async def search_foods(
+    request: CategorySearchRequest,
+) -> CategorySearchResponse:
+    """
+    食事・レストランを検索
+
+    グルメ、レストラン、地元料理などを検索します。
+    """
+    query = SearchQuery(
+        category=POICategory.FOOD,
+        destination=request.destination,
+        keywords=request.keywords if request.keywords else ["グルメ", "名物", "ランチ", "ディナー", "地元料理"],
+        constraints=request.constraints,
+    )
+
+    result = await food_search_agent.search(query)
+
+    return CategorySearchResponse(
+        category=POICategory.FOOD,
+        destination=request.destination,
+        items=result.items,
+        total_count=len(result.items),
+        search_time_ms=result.search_time_ms,
+        source=result.source,
+    )
+
+
+@router.post("/search/hotel", response_model=CategorySearchResponse)
+async def search_hotels(
+    request: CategorySearchRequest,
+) -> CategorySearchResponse:
+    """
+    宿泊施設を検索
+
+    ホテル、旅館、宿泊施設などを検索します。
+    """
+    query = SearchQuery(
+        category=POICategory.HOTEL,
+        destination=request.destination,
+        keywords=request.keywords if request.keywords else ["宿泊", "ホテル", "旅館"],
+        constraints=request.constraints,
+    )
+
+    result = await hotel_search_agent.search(query)
+
+    return CategorySearchResponse(
+        category=POICategory.HOTEL,
+        destination=request.destination,
+        items=result.items,
+        total_count=len(result.items),
+        search_time_ms=result.search_time_ms,
+        source=result.source,
     )

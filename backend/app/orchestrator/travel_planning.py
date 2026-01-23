@@ -269,13 +269,23 @@ class TravelPlanningOrchestrator:
         """
         start_time = time.time()
 
-        # キーワードを構築
+        # キーワードを構築（空の場合はデフォルトキーワードを使用）
+        activity_keywords = wishes.activities + wishes.experiences
+        if not activity_keywords:
+            activity_keywords = ["観光", "体験", "名所"]
+
+        food_keywords = wishes.food_preferences
+        if not food_keywords:
+            food_keywords = ["グルメ", "名物", "ランチ", "ディナー", "地元料理"]
+
+        hotel_keywords = [constraints.accommodation_type] if constraints.accommodation_type else []
+        if not hotel_keywords:
+            hotel_keywords = ["宿泊", "ホテル", "旅館"]
+
         keywords = {
-            "activity": wishes.activities + wishes.experiences,
-            "food": wishes.food_preferences,
-            "hotel": [constraints.accommodation_type]
-            if constraints.accommodation_type
-            else [],
+            "activity": activity_keywords,
+            "food": food_keywords,
+            "hotel": hotel_keywords,
         }
 
         search_result = await search_all_categories(

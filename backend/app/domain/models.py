@@ -16,6 +16,12 @@ class User(Base):
         primary_key=True,
         default=lambda: str(uuid4()),
     )
+    username: Mapped[str | None] = mapped_column(
+        String(50),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,

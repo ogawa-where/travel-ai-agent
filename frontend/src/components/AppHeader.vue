@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import WorkerStatus from './WorkerStatus.vue'
+
 defineProps<{
   profileSummary: string
+  username: string
 }>()
 
 const emit = defineEmits<{
   showProfile: []
-  reset: []
+  logout: []
 }>()
 </script>
 
@@ -17,6 +20,7 @@ const emit = defineEmits<{
         <p>あなたの旅をサポート</p>
       </div>
       <div class="header-actions">
+        <WorkerStatus />
         <button
           class="profile-btn"
           @click="emit('showProfile')"
@@ -29,8 +33,9 @@ const emit = defineEmits<{
           </svg>
           <span>プロフィール</span>
         </button>
-        <button class="reset-btn" @click="emit('reset')" title="新しいユーザーとして開始">
-          リセット
+        <span v-if="username" class="username">{{ username }}</span>
+        <button class="logout-btn" @click="emit('logout')" title="ログアウト">
+          ログアウト
         </button>
       </div>
     </div>
@@ -100,7 +105,15 @@ const emit = defineEmits<{
   background: rgba(72, 187, 120, 0.3);
 }
 
-.reset-btn {
+.username {
+  padding: 0.4rem 0.75rem;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.logout-btn {
   padding: 0.5rem 0.75rem;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
@@ -111,7 +124,7 @@ const emit = defineEmits<{
   transition: all 0.2s;
 }
 
-.reset-btn:hover {
+.logout-btn:hover {
   background: rgba(231, 76, 60, 0.8);
   border-color: rgba(231, 76, 60, 0.8);
   color: white;

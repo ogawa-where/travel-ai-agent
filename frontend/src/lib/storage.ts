@@ -1,5 +1,6 @@
 const STORAGE_KEYS = {
   USER_ID: 'travel-ai-agent:user-id',
+  USERNAME: 'travel-ai-agent:username',
 } as const
 
 export const storage = {
@@ -24,6 +25,30 @@ export const storage = {
       localStorage.removeItem(STORAGE_KEYS.USER_ID)
     } catch {
       console.warn('Failed to clear user ID from localStorage')
+    }
+  },
+
+  getUsername(): string | null {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.USERNAME)
+    } catch {
+      return null
+    }
+  },
+
+  setUsername(username: string): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.USERNAME, username)
+    } catch {
+      console.warn('Failed to save username to localStorage')
+    }
+  },
+
+  clearUsername(): void {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.USERNAME)
+    } catch {
+      console.warn('Failed to clear username from localStorage')
     }
   },
 

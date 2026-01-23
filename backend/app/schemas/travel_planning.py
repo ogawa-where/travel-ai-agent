@@ -409,3 +409,27 @@ class POIFeedbackResponse(BaseModel):
     feedback_type: POIFeedbackType
     learned_preference: dict | None = None  # 学習した嗜好（あれば）
     message: str = "フィードバックを受け付けました"
+
+
+# =============================================================================
+# 個別検索API用
+# =============================================================================
+
+
+class CategorySearchRequest(BaseModel):
+    """カテゴリ別検索リクエスト"""
+
+    destination: str = Field(..., description="検索先の目的地")
+    keywords: list[str] = Field(default_factory=list, description="検索キーワード")
+    constraints: dict = Field(default_factory=dict, description="制約条件")
+
+
+class CategorySearchResponse(BaseModel):
+    """カテゴリ別検索レスポンス"""
+
+    category: POICategory
+    destination: str
+    items: list[POISearchResult] = Field(default_factory=list)
+    total_count: int = 0
+    search_time_ms: int = 0
+    source: str = "tavily"

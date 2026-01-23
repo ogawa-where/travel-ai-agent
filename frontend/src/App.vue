@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { api } from './lib/api'
 import { storage } from './lib/storage'
 import { getErrorMessage } from './lib/errors'
-import type { User, TravelPlan, UserProfile, LearnedPreference } from './lib/api'
+import type { User, TravelPlan, UserProfile, LearnedPreference, PreferenceSignal, LoginResponse } from './lib/api'
 import AppHeader from './components/AppHeader.vue'
+import LoginScreen from './components/LoginScreen.vue'
 import PreferenceToast from './components/PreferenceToast.vue'
 import TravelPlanCard from './components/TravelPlanCard.vue'
 
@@ -21,7 +22,9 @@ const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
 const isLoading = ref(false)
 const isInitializing = ref(true)
+const isLoggedIn = ref(false)
 const userProfile = ref<UserProfile | null>(null)
+const preferenceSignals = ref<PreferenceSignal[]>([])
 const currentPlan = ref<TravelPlan | null>(null)
 const isSendingFeedback = ref(false)
 const showProfileModal = ref(false)
@@ -30,6 +33,31 @@ const messagesContainer = ref<HTMLElement | null>(null)
 
 // Toast notifications for learned preferences
 const pendingToasts = ref<LearnedPreference[]>([])
+
+// Group preferences by category
+const groupedPreferences = computed(() => {
+  const groups: Record<string, PreferenceSignal[]> = {}
+  for (const signal of preferenceSignals.value) {
+    if (!groups[signal.category]) {
+      groups[signal.category] = []
+    }
+    groups[signal.category].push(signal)
+  }
+  // Sort by weight within each group
+  for (const category in groups) {
+    groups[category].sort((a, b) => b.weight - a.weight)
+  }
+  return groups
+})
+
+const categoryLabels: Record<string, string> = {
+  food: '食事',
+  activity: '観光・体験',
+  accommodation: '宿泊',
+  travel_style: '旅行スタイル',
+  budget: '予算',
+  general: 'その他',
+}
 
 const formatMessage = (content: string): string => {
   return content
@@ -72,25 +100,27 @@ const initializeApp = async () => {
     isLoading.value = true
     isInitializing.value = true
 
-    // Check for existing user in localStorage
-    const storedUserId = storage.getUserId()
-    if (storedUserId) {
+    // Check for existing username in localStorage
+    const storedUsername = storage.getUsername()
+    if (storedUsername) {
       try {
-        user.value = await api.getUser(storedUserId)
-        userProfile.value = user.value.profile
+        // Re-login with stored username
+        const response = await api.login(storedUsername)
+        user.value = response.user
+        storage.setUserId(response.user.id)
+        userProfile.value = response.user.profile
+        preferenceSignals.value = response.user.preference_signals || []
+        isLoggedIn.value = true
         await initializeChat()
         return
       } catch {
-        // User not found, clear storage and create new user
-        storage.clearUserId()
+        // Login failed, clear storage and show login screen
+        storage.clearAll()
       }
     }
 
-    // Create new user
-    user.value = await api.createUser()
-    storage.setUserId(user.value.id)
-    userProfile.value = user.value.profile
-    await initializeChat()
+    // No stored username, show login screen
+    isLoggedIn.value = false
   } catch (error) {
     console.error('Failed to initialize app:', error)
   } finally {
@@ -99,14 +129,29 @@ const initializeApp = async () => {
   }
 }
 
-const resetApp = async () => {
+const handleLogin = async (response: LoginResponse) => {
+  user.value = response.user
+  storage.setUserId(response.user.id)
+  storage.setUsername(response.user.username || '')
+  userProfile.value = response.user.profile
+  preferenceSignals.value = response.user.preference_signals || []
+  isLoggedIn.value = true
+  await initializeChat()
+}
+
+const resetApp = () => {
   storage.clearAll()
   user.value = null
   sessionId.value = null
   messages.value = []
   userProfile.value = null
+  preferenceSignals.value = []
   currentPlan.value = null
-  await initializeApp()
+  isLoggedIn.value = false
+}
+
+const logout = () => {
+  resetApp()
 }
 
 const sendMessage = async (userMessage: string) => {
@@ -151,6 +196,7 @@ const sendMessage = async (userMessage: string) => {
     if (response.learned_preferences && response.learned_preferences.length > 0) {
       const updatedUser = await api.getUser(user.value.id)
       userProfile.value = updatedUser.profile
+      preferenceSignals.value = updatedUser.preference_signals || []
     }
   } catch (error) {
     console.error('Failed to send message:', error)
@@ -196,6 +242,7 @@ const sendPlanFeedback = async (feedback: string) => {
     // Refresh profile
     const updatedUser = await api.getUser(user.value.id)
     userProfile.value = updatedUser.profile
+    preferenceSignals.value = updatedUser.preference_signals || []
   } catch (error) {
     console.error('Failed to send feedback:', error)
     messages.value.push({
@@ -227,6 +274,7 @@ const handlePOIFeedback = async (
     try {
       const updatedUser = await api.getUser(user.value.id)
       userProfile.value = updatedUser.profile
+      preferenceSignals.value = updatedUser.preference_signals || []
     } catch (error) {
       console.error('Failed to refresh user profile:', error)
     }
@@ -248,13 +296,19 @@ onMounted(() => {
 
 <template>
   <div class="app">
-    <AppHeader
-      :profile-summary="userProfile?.summary || ''"
-      @show-profile="showProfile"
-      @reset="resetApp"
-    />
+    <!-- Login Screen -->
+    <LoginScreen v-if="!isLoggedIn && !isInitializing" @login="handleLogin" />
 
-    <main class="main">
+    <!-- Main App -->
+    <template v-else-if="isLoggedIn">
+      <AppHeader
+        :profile-summary="userProfile?.summary || ''"
+        :username="user?.username || ''"
+        @show-profile="showProfile"
+        @logout="logout"
+      />
+
+      <main class="main">
       <div class="chat-wrapper">
         <div class="messages-container" ref="messagesContainer">
           <div v-if="isInitializing" class="loading-state">
@@ -309,31 +363,64 @@ onMounted(() => {
           </button>
         </div>
       </div>
-    </main>
+      </main>
 
-    <!-- Toast notifications for learned preferences -->
-    <PreferenceToast :preferences="pendingToasts" @clear="clearToasts" />
+      <!-- Toast notifications for learned preferences -->
+      <PreferenceToast :preferences="pendingToasts" @clear="clearToasts" />
 
-    <!-- Profile Modal -->
-    <Teleport to="body">
-      <div v-if="showProfileModal" class="modal-overlay" @click="closeProfile">
-        <div class="modal-content" @click.stop>
-          <div class="modal-header">
-            <h2>あなたのプロフィール</h2>
-            <button class="close-btn" @click="closeProfile">&times;</button>
-          </div>
-          <div class="modal-body">
-            <div v-if="userProfile?.summary" class="profile-summary">
-              <p>{{ userProfile.summary }}</p>
+      <!-- Profile Modal -->
+      <Teleport to="body">
+        <div v-if="showProfileModal" class="modal-overlay" @click="closeProfile">
+          <div class="modal-content" @click.stop>
+            <div class="modal-header">
+              <h2>あなたのプロフィール</h2>
+              <button class="close-btn" @click="closeProfile">&times;</button>
             </div>
-            <div v-else class="no-profile">
-              <p>まだプロフィールがありません。</p>
-              <p>チャットを通じてあなたの好みを教えてください！</p>
+            <div class="modal-body">
+              <div v-if="userProfile?.summary" class="profile-summary">
+                <h3>サマリー</h3>
+                <p>{{ userProfile.summary }}</p>
+              </div>
+
+              <div v-if="Object.keys(groupedPreferences).length > 0" class="preferences-detail">
+                <h3>学習した嗜好</h3>
+                <div
+                  v-for="(signals, category) in groupedPreferences"
+                  :key="category"
+                  class="preference-category"
+                >
+                  <h4>{{ categoryLabels[category] || category }}</h4>
+                  <div class="preference-tags">
+                    <div
+                      v-for="signal in signals"
+                      :key="signal.id"
+                      class="preference-tag"
+                      :class="{ 'positive': signal.weight > 0, 'negative': signal.weight < 0 }"
+                      :title="signal.evidence"
+                    >
+                      <span class="tag-icon">{{ signal.weight > 0 ? '👍' : '👎' }}</span>
+                      <span class="tag-name">{{ signal.tag }}</span>
+                      <span class="tag-weight">{{ Math.abs(signal.weight).toFixed(1) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="!userProfile?.summary && Object.keys(groupedPreferences).length === 0" class="no-profile">
+                <p>まだプロフィールがありません。</p>
+                <p>チャットを通じてあなたの好みを教えてください！</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </Teleport>
+      </Teleport>
+    </template>
+
+    <!-- Initial Loading State -->
+    <div v-if="isInitializing" class="initializing-screen">
+      <div class="spinner"></div>
+      <p>読み込み中...</p>
+    </div>
   </div>
 </template>
 
@@ -570,11 +657,89 @@ onMounted(() => {
   max-height: 60vh;
 }
 
+.profile-summary h3,
+.preferences-detail h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #2d3748;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .profile-summary p {
   margin: 0;
   line-height: 1.6;
   color: #4a5568;
   white-space: pre-wrap;
+}
+
+.profile-summary {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.preferences-detail {
+  margin-bottom: 1rem;
+}
+
+.preference-category {
+  margin-bottom: 1rem;
+}
+
+.preference-category h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #718096;
+}
+
+.preference-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.preference-tag {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  cursor: default;
+  transition: transform 0.1s;
+}
+
+.preference-tag:hover {
+  transform: scale(1.02);
+}
+
+.preference-tag.positive {
+  background: rgba(72, 187, 120, 0.15);
+  color: #276749;
+  border: 1px solid rgba(72, 187, 120, 0.3);
+}
+
+.preference-tag.negative {
+  background: rgba(245, 101, 101, 0.15);
+  color: #c53030;
+  border: 1px solid rgba(245, 101, 101, 0.3);
+}
+
+.tag-icon {
+  font-size: 0.75rem;
+}
+
+.tag-name {
+  font-weight: 500;
+}
+
+.tag-weight {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  font-weight: 400;
 }
 
 .no-profile {
@@ -584,5 +749,30 @@ onMounted(() => {
 
 .no-profile p {
   margin: 0.5rem 0;
+}
+
+.initializing-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.initializing-screen .spinner {
+  width: 50px;
+  height: 50px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.initializing-screen p {
+  font-size: 1rem;
+  opacity: 0.9;
 }
 </style>
