@@ -218,9 +218,10 @@ class FoodSearchAgent(BaseSearchAgent):
         """食・レストラン用のキーワードを構築"""
         keywords = list(query.keywords) if query.keywords else []
 
-        constraints = query.constraints
-        if constraints.get("food_preferences"):
-            keywords.extend(constraints["food_preferences"])
+        # Note: query.constraints には wishes の情報も含まれる（呼び出し元で統合）
+        data = query.constraints
+        if data.get("food_preferences"):
+            keywords.extend(data["food_preferences"])
 
         return keywords
 
@@ -297,9 +298,10 @@ class HotelSearchAgent(BaseSearchAgent):
         """宿泊先用のキーワードを構築"""
         keywords = list(query.keywords) if query.keywords else []
 
-        constraints = query.constraints
-        if constraints.get("accommodation_type"):
-            keywords.append(constraints["accommodation_type"])
+        # Note: query.constraints には wishes の情報も含まれる（呼び出し元で統合）
+        data = query.constraints
+        if data.get("accommodation_type"):
+            keywords.append(data["accommodation_type"])
 
         return keywords
 

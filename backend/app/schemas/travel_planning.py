@@ -30,7 +30,13 @@ class PlanRequestStatus(str, Enum):
 
 
 class TravelConstraints(BaseModel):
-    """旅行の制約条件"""
+    """旅行の制約条件（変更不可の硬い制約）
+
+    制約 = ユーザーが変えられない/変えたくない条件
+    - 日程、予算上限、人数、移動手段の制限、身体的制限など
+
+    Note: 宿泊タイプの希望などは TravelWishes で扱う
+    """
 
     destination: str | None = Field(default="", description="目的地・地域")
     start_date: str | None = Field(default=None, description="開始日 (YYYY-MM-DD)")
@@ -40,7 +46,9 @@ class TravelConstraints(BaseModel):
     budget_per_day: int | None = Field(default=None, description="1日あたり予算（円）")
     num_people: int | None = Field(default=1, description="人数")
     transportation: str | None = Field(default="", description="移動手段の制約")
-    accommodation_type: str | None = Field(default="", description="宿泊タイプの希望")
+    physical_limitations: list[str] | None = Field(
+        default_factory=list, description="身体的制限（車椅子、足が悪いなど）"
+    )
     other: dict | None = Field(default_factory=dict, description="その他の制約")
 
     def model_post_init(self, __context) -> None:
@@ -51,14 +59,18 @@ class TravelConstraints(BaseModel):
             object.__setattr__(self, "num_people", 1)
         if self.transportation is None:
             object.__setattr__(self, "transportation", "")
-        if self.accommodation_type is None:
-            object.__setattr__(self, "accommodation_type", "")
+        if self.physical_limitations is None:
+            object.__setattr__(self, "physical_limitations", [])
         if self.other is None:
             object.__setattr__(self, "other", {})
 
 
 class TravelWishes(BaseModel):
-    """旅行の希望・やりたいこと"""
+    """旅行の希望・やりたいこと（柔軟な希望）
+
+    希望 = できれば叶えたいが、必須ではない条件
+    - やりたいこと、食べたいもの、雰囲気、宿泊タイプなど
+    """
 
     activities: list[str] | None = Field(
         default_factory=list, description="やりたいアクティビティ"
@@ -68,6 +80,7 @@ class TravelWishes(BaseModel):
         default_factory=list, description="食べたいもの"
     )
     avoid: list[str] | None = Field(default_factory=list, description="避けたいこと")
+    accommodation_type: str | None = Field(default="", description="宿泊タイプの希望")
     priority: str | None = Field(default="", description="最も重視すること")
     mood: str | None = Field(default="", description="旅の雰囲気・テーマ")
     other: dict | None = Field(default_factory=dict, description="その他の希望")
@@ -82,6 +95,8 @@ class TravelWishes(BaseModel):
             object.__setattr__(self, "food_preferences", [])
         if self.avoid is None:
             object.__setattr__(self, "avoid", [])
+        if self.accommodation_type is None:
+            object.__setattr__(self, "accommodation_type", "")
         if self.priority is None:
             object.__setattr__(self, "priority", "")
         if self.mood is None:

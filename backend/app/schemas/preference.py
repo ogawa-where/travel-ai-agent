@@ -5,10 +5,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PreferenceCategory(str, Enum):
+    """嗜好カテゴリ（長期記憶用）
+
+    - LIKES: 好きなもの（食事、アクティビティなど）
+    - DISLIKES: 嫌いなもの・避けたいもの
+    - EXPERIENCE_AXIS: 体験軸の嗜好（文化/自然/冒険/リラックスなど）
+    - TENDENCY: 旅行傾向（予算より体験重視、計画より即興など）
+
+    Note: 短期的な制約（予算3万円、2泊3日など）は TravelConstraints で扱う
+    """
+
     LIKES = "likes"
     DISLIKES = "dislikes"
     EXPERIENCE_AXIS = "experience_axis"
-    CONSTRAINTS = "constraints"
+    TENDENCY = "tendency"  # 旧 CONSTRAINTS - 傾向を表す
 
 
 class PreferenceSignalBase(BaseModel):

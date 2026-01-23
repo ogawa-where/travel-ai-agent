@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """あなたは旅行計画のアシスタントです。
 ユーザーの旅行リクエストを分析し、構造化されたJSON形式で出力してください。
 
+【制約と希望の違い】
+- 制約（constraints）: 変更不可の硬い条件（日程、予算上限、人数など）
+- 希望（wishes）: 柔軟な要望（やりたいこと、宿泊タイプ、雰囲気など）
+
 出力は必ず以下のJSON形式で返してください：
 {
   "constraints": {
@@ -33,7 +37,7 @@ SYSTEM_PROMPT = """あなたは旅行計画のアシスタントです。
     "budget_per_day": 1日あたり予算（円）または null,
     "num_people": 人数,
     "transportation": "移動手段の制約",
-    "accommodation_type": "宿泊タイプの希望",
+    "physical_limitations": ["身体的制限のリスト（車椅子、足が悪いなど）"],
     "other": {}
   },
   "wishes": {
@@ -41,6 +45,7 @@ SYSTEM_PROMPT = """あなたは旅行計画のアシスタントです。
     "experiences": ["体験したいことのリスト"],
     "food_preferences": ["食べたいもののリスト"],
     "avoid": ["避けたいことのリスト"],
+    "accommodation_type": "宿泊タイプの希望",
     "priority": "最も重視すること",
     "mood": "旅の雰囲気・テーマ",
     "other": {}

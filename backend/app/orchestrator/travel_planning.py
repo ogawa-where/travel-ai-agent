@@ -278,7 +278,7 @@ class TravelPlanningOrchestrator:
         if not food_keywords:
             food_keywords = ["グルメ", "名物", "ランチ", "ディナー", "地元料理"]
 
-        hotel_keywords = [constraints.accommodation_type] if constraints.accommodation_type else []
+        hotel_keywords = [wishes.accommodation_type] if wishes.accommodation_type else []
         if not hotel_keywords:
             hotel_keywords = ["宿泊", "ホテル", "旅館"]
 

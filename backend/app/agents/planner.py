@@ -74,18 +74,19 @@ SYSTEM_PROMPT = """あなたは旅行計画の専門家です。
 
 PLANNER_PROMPT = """以下の条件で旅程を作成してください。
 
-【制約条件】
+【制約条件（必ず守る）】
 - 目的地: {destination}
 - 日程: {duration}日間
 - 予算: {budget}
 - 人数: {num_people}人
 - 移動手段: {transportation}
-- 宿泊タイプ: {accommodation_type}
+- 身体的制限: {physical_limitations}
 
-【希望】
+【希望（できれば叶える）】
 - やりたいこと: {activities}
 - 体験したいこと: {experiences}
 - 食の好み: {food_preferences}
+- 宿泊タイプ: {accommodation_type}
 - 重視すること: {priority}
 - 雰囲気: {mood}
 
@@ -170,13 +171,20 @@ class PlannerAgent:
 
         wishes = input_data.wishes
 
+        # 身体的制限
+        physical_limitations = (
+            ", ".join(constraints.physical_limitations)
+            if constraints.physical_limitations
+            else "特になし"
+        )
+
         return PLANNER_PROMPT.format(
             destination=constraints.destination or "未定",
             duration=duration,
             budget=budget,
             num_people=constraints.num_people,
             transportation=constraints.transportation or "特になし",
-            accommodation_type=constraints.accommodation_type or "特になし",
+            physical_limitations=physical_limitations,
             activities=", ".join(wishes.activities)
             if wishes.activities
             else "特になし",
@@ -188,6 +196,7 @@ class PlannerAgent:
                 if wishes.food_preferences
                 else "特になし"
             ),
+            accommodation_type=wishes.accommodation_type or "特になし",
             priority=wishes.priority or "特になし",
             mood=wishes.mood or "特になし",
             activity_pois=activity_pois,
