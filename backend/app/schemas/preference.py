@@ -10,15 +10,16 @@ class PreferenceCategory(str, Enum):
     - LIKES: 好きなもの（食事、アクティビティなど）
     - DISLIKES: 嫌いなもの・避けたいもの
     - EXPERIENCE_AXIS: 体験軸の嗜好（文化/自然/冒険/リラックスなど）
-    - TENDENCY: 旅行傾向（予算より体験重視、計画より即興など）
+    - TENDENCY: 旅行傾向（計画派か即興派か、ゆっくり派かアクティブ派かなど）
 
     Note: 短期的な制約（予算3万円、2泊3日など）は TravelConstraints で扱う
+    Note: 「体験重視」はプラットフォームの前提なので抽出しない
     """
 
     LIKES = "likes"
     DISLIKES = "dislikes"
     EXPERIENCE_AXIS = "experience_axis"
-    TENDENCY = "tendency"  # 旧 CONSTRAINTS - 傾向を表す
+    TENDENCY = "tendency"
 
 
 class PreferenceSignalBase(BaseModel):
