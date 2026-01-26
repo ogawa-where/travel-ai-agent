@@ -23,15 +23,14 @@ class LoginRequest(BaseModel):
 
 class UserResponse(BaseModel):
     """ユーザーレスポンス"""
+    model_config = {"from_attributes": True}
+
     id: str
     username: str | None
     created_at: str
     updated_at: str
     profile: dict | None
     preference_signals: list[dict]
-
-    class Config:
-        from_attributes = True
 
 
 class LoginResponse(BaseModel):

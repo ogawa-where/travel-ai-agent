@@ -18,7 +18,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import wraps
 from typing import Any, Callable
 
@@ -40,7 +40,7 @@ class StructuredLogFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -249,7 +249,7 @@ class MetricsCollector:
         metrics = self._agent_metrics[agent_name]
         metrics.call_count += 1
         metrics.total_latency_ms += latency_ms
-        metrics.last_called = datetime.utcnow()
+        metrics.last_called = datetime.now(UTC)
         if not success:
             metrics.error_count += 1
 
@@ -298,7 +298,7 @@ class RunArtifact:
     run_id: str
     artifact_type: str  # request, selected_pois, plan, rationale, config
     data: dict | str
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class ArtifactStorage:

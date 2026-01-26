@@ -7,7 +7,7 @@ CLAUDE.md セクション4.1の責務を実装。
 
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -198,7 +198,7 @@ class TravelPlanningOrchestrator:
             # リクエストとPlanRunを完了
             request.status = "completed"
             plan_run.status = "completed"
-            plan_run.completed_at = datetime.utcnow()
+            plan_run.completed_at = datetime.now(UTC)
             plan_run.metrics = {
                 "total_time_ms": int((time.time() - start_time) * 1000),
                 "search_results_count": sum(
@@ -222,7 +222,7 @@ class TravelPlanningOrchestrator:
             logger.error(f"Travel planning failed: {e}")
             request.status = "failed"
             plan_run.status = "failed"
-            plan_run.completed_at = datetime.utcnow()
+            plan_run.completed_at = datetime.now(UTC)
             plan_run.error_message = str(e)
             await db.commit()
             raise

@@ -4,10 +4,9 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://travel:travel@postgres:5432/travel_agent"
+    model_config = {"env_file": ".env"}
 
-    class Config:
-        env_file = ".env"
+    database_url: str = "postgresql+asyncpg://travel:travel@postgres:5432/travel_agent"
 
 
 settings = Settings()

@@ -48,15 +48,14 @@ class WorkerRole(str, Enum):
 
 
 class Settings(BaseSettings):
+    model_config = {"env_file": ".env"}
+
     ollama_workers: str = "localhost:11434"
     ollama_model_heavy: str = "qwen2.5:32b-instruct"
     ollama_model_light: str = "llama-swallow:8b"
     ollama_model_embed: str = "nomic-embed-text"
     llm_max_retries: int = 3
     llm_timeout: int = 120
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()

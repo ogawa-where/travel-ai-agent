@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -24,12 +24,12 @@ class User(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     profile: Mapped["UserProfile"] = relationship(
@@ -68,12 +68,12 @@ class UserProfile(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     user: Mapped["User"] = relationship(back_populates="profile")
@@ -112,12 +112,12 @@ class PreferenceSignal(Base):
     )  # 追加情報
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     user: Mapped["User"] = relationship(back_populates="preference_signals")
@@ -147,12 +147,12 @@ class Session(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     user: Mapped["User"] = relationship(back_populates="sessions")
@@ -197,7 +197,7 @@ class Message(Base):
     )  # 要約に吸収済みか
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
 
     session: Mapped["Session"] = relationship(back_populates="messages")
@@ -228,12 +228,12 @@ class SessionSummary(Base):
     )  # 最後に要約したターン番号
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     session: Mapped["Session"] = relationship(back_populates="summary")
@@ -283,12 +283,12 @@ class TravelPlanRequest(Base):
     )  # pending, processing, completed, failed
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     plans: Mapped[list["TravelPlan"]] = relationship(
@@ -344,7 +344,7 @@ class TravelPlan(Base):
     )  # ユーザーが選択した案か
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
 
     request: Mapped["TravelPlanRequest"] = relationship(back_populates="plans")
@@ -398,7 +398,7 @@ class POICache(Base):
     )
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     experiences_extracted_at: Mapped[datetime | None] = mapped_column(
         DateTime,
@@ -406,7 +406,7 @@ class POICache(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
 
 
@@ -427,7 +427,7 @@ class PlanRun(Base):
     # 実行情報
     started_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime,
@@ -506,7 +506,7 @@ class SessionEvent(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
     )
 
     plan_run: Mapped["PlanRun"] = relationship(back_populates="events")

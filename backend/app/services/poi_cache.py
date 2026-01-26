@@ -6,7 +6,7 @@ POI情報と抽出された体験をキャッシュし、
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -152,7 +152,7 @@ class POICacheService:
         if not cached.fetched_at:
             return False
         expiry = cached.fetched_at + timedelta(days=CACHE_EXPIRY_DAYS)
-        return datetime.utcnow() < expiry
+        return datetime.now(UTC) < expiry
 
     def _needs_experience_extraction(self, cached: POICache) -> bool:
         """体験の抽出が必要か"""
@@ -161,7 +161,7 @@ class POICacheService:
         if not cached.experiences_extracted_at:
             return True
         expiry = cached.experiences_extracted_at + timedelta(days=EXPERIENCE_EXPIRY_DAYS)
-        return datetime.utcnow() > expiry
+        return datetime.now(UTC) > expiry
 
     async def _extract_and_cache_experiences(
         self,
@@ -181,7 +181,7 @@ class POICacheService:
             # 体験タグのリストを保存
             experience_tags = [exp.tag for exp in experiences]
             cached.experiences = experience_tags
-            cached.experiences_extracted_at = datetime.utcnow()
+            cached.experiences_extracted_at = datetime.now(UTC)
             # 埋め込みをクリア（再計算が必要）
             cached.embedding = None
             await db.flush()
@@ -192,7 +192,7 @@ class POICacheService:
             logger.warning(f"Failed to extract experiences for {poi.name}: {e}")
             # 失敗時はタグをフォールバック
             cached.experiences = poi.tags or []
-            cached.experiences_extracted_at = datetime.utcnow()
+            cached.experiences_extracted_at = datetime.now(UTC)
             await db.flush()
 
     def _build_experience_text(self, cached: POICache) -> str:
