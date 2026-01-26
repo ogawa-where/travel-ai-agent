@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.domain import models  # noqa: F401 - Import models to register with Base
-from app.routers import auth, observability, preference, travel_planning, unified_chat
+from app.routers import auth, geo, observability, preference, travel_planning, unified_chat
 
 # ログレベル設定
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -49,6 +49,7 @@ app.include_router(auth.router)  # 認証
 app.include_router(unified_chat.router, prefix="/api")  # 統合チャット（新）
 app.include_router(preference.router, prefix="/api")
 app.include_router(travel_planning.router, prefix="/api")
+app.include_router(geo.router)  # ジオコーディング・ルーティング
 app.include_router(observability.router)
 
 

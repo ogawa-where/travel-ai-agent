@@ -124,6 +124,8 @@ class POIBase(BaseModel):
     rating: float | None = None
     tags: list[str] | None = Field(default_factory=list)
     source_url: str | None = ""
+    latitude: float | None = None
+    longitude: float | None = None
 
     def model_post_init(self, __context) -> None:
         """None値をデフォルト値に変換"""

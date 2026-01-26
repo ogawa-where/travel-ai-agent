@@ -37,5 +37,15 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  osrm:
+    image: osrm/osrm-backend:latest
+    ports:
+      - "5001:5000"
+    volumes:
+      - osrm_data:/data
+    command: osrm-routed --algorithm mld /data/japan-latest.osrm
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  osrm_data:

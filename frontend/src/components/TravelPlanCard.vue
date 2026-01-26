@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue'
-import type { TravelPlan, POIFeedbackType, POICategory } from '../lib/api'
+import { ref, computed, reactive, watch } from 'vue'
+import type { TravelPlan, POIFeedbackType, POICategory, GeoEnrichedItinerary } from '../lib/api'
 import { api } from '../lib/api'
 import ItineraryDisplay from './ItineraryDisplay.vue'
+import ItineraryMap from './ItineraryMap.vue'
+import MapModal from './MapModal.vue'
 
 const props = defineProps<{
   plan: TravelPlan
@@ -20,6 +22,31 @@ const showFeedbackForm = ref(false)
 
 // Track POI feedback state
 const poiFeedback = reactive<Record<string, POIFeedbackType>>({})
+
+// Map state
+const geoData = ref<GeoEnrichedItinerary | null>(null)
+const geoLoading = ref(false)
+const geoError = ref(false)
+const showMapModal = ref(false)
+
+// Fetch geo data when plan becomes available
+const fetchGeoData = async () => {
+  if (geoData.value || geoLoading.value) return
+  geoLoading.value = true
+  geoError.value = false
+  try {
+    const destination = props.plan.itinerary.days?.[0]?.items?.[0]?.poi?.location || ''
+    geoData.value = await api.enrichItineraryGeo(props.plan.itinerary, destination)
+  } catch {
+    geoError.value = true
+  } finally {
+    geoLoading.value = false
+  }
+}
+
+watch(() => props.plan, () => {
+  fetchGeoData()
+}, { immediate: true })
 
 const scorePercentage = computed(() => Math.round(props.plan.score * 100))
 
@@ -119,6 +146,22 @@ const handlePOIFeedback = async (
           @poi-feedback="handlePOIFeedback"
         />
 
+        <!-- Map section -->
+        <div v-if="geoLoading" class="map-section map-loading">
+          <div class="map-skeleton"></div>
+          <span class="loading-text">地図を読み込み中...</span>
+        </div>
+        <div v-else-if="geoData && !geoError" class="map-section">
+          <ItineraryMap
+            :geo-data="geoData"
+            :selected-day="0"
+            height="250px"
+          />
+          <button class="map-expand-btn" @click.stop="showMapModal = true">
+            地図を大きく見る
+          </button>
+        </div>
+
         <div v-if="plan.rationale" class="rationale">
           <h4>このプランについて</h4>
           <p>{{ plan.rationale }}</p>
@@ -163,6 +206,14 @@ const handlePOIFeedback = async (
         </div>
       </div>
     </Transition>
+
+    <!-- Full-screen map modal -->
+    <MapModal
+      v-if="geoData"
+      :geo-data="geoData"
+      :visible="showMapModal"
+      @close="showMapModal = false"
+    />
   </div>
 </template>
 
@@ -416,6 +467,55 @@ const handlePOIFeedback = async (
 .submit-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.map-section {
+  margin-top: 16px;
+}
+
+.map-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-skeleton {
+  width: 100%;
+  height: 250px;
+  background: linear-gradient(110deg, #e2e8f0 8%, #edf2f7 18%, #e2e8f0 33%);
+  background-size: 200% 100%;
+  border-radius: 8px;
+  animation: skeleton-shine 1.5s linear infinite;
+}
+
+@keyframes skeleton-shine {
+  to {
+    background-position-x: -200%;
+  }
+}
+
+.loading-text {
+  font-size: 0.8rem;
+  color: #a0aec0;
+}
+
+.map-expand-btn {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  background: #edf2f7;
+  border: none;
+  border-radius: 6px;
+  color: #4a5568;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.map-expand-btn:hover {
+  background: #e2e8f0;
 }
 
 /* Transition */
