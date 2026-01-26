@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.explainer import explainer_agent
 from app.agents.planner import planner_agent
 from app.agents.rerank import rerank_agent
-from app.agents.search_agents import search_all_categories
+from app.agents.search_agents import search_all_categories, search_with_reasoning, SearchAllResult
+from app.agents.search_evaluator import search_evaluator_agent
 from app.agents.translator import translator_agent
 from app.domain.models import PlanRun, SessionEvent, TravelPlan, TravelPlanRequest
 from app.schemas.travel_planning import (
@@ -22,10 +23,12 @@ from app.schemas.travel_planning import (
     PlannerInput,
     POICategory,
     RerankInput,
+    SearchResult,
     TranslateRequestInput,
     TravelConstraints,
     TravelWishes,
 )
+from app.agents.search_agents import SearchStatus
 from app.services.normalizer import normalizer_deduper
 from app.services.observability import artifact_storage
 
@@ -263,40 +266,99 @@ class TravelPlanningOrchestrator:
         constraints: TravelConstraints,
         wishes: TravelWishes,
     ):
-        """ステップ2: 検索（3カテゴリ並列）
+        """ステップ2: ハイブリッド2段階検索（4カテゴリ並列 + 横断評価）
+
+        Phase 1: 4サーバー並列 SearchReasoningLoop（各最大2イテレーション）
+        Phase 2: オーケストレーター横断評価（Heavy LLM）
+        不足カテゴリがあれば再検索（最大1回の追加ラウンド）
 
         CLAUDE.md 8.7: 1-2エージェント失敗時は残りの結果で続行
         """
         start_time = time.time()
 
-        # キーワードを構築（空の場合はデフォルトキーワードを使用）
-        activity_keywords = wishes.activities + wishes.experiences
-        if not activity_keywords:
-            activity_keywords = ["観光", "体験", "名所"]
-
-        food_keywords = wishes.food_preferences
-        if not food_keywords:
-            food_keywords = ["グルメ", "名物", "ランチ", "ディナー", "地元料理"]
-
-        hotel_keywords = [wishes.accommodation_type] if wishes.accommodation_type else []
-        if not hotel_keywords:
-            hotel_keywords = ["宿泊", "ホテル", "旅館"]
-
-        keywords = {
-            "activity": activity_keywords,
-            "food": food_keywords,
-            "hotel": hotel_keywords,
-        }
-
-        search_result = await search_all_categories(
+        # Phase 1: 4カテゴリ並列の推論ループ検索
+        logger.info(f"Phase 1: Starting parallel reasoning search for {constraints.destination}")
+        phase1_result = await search_with_reasoning(
             destination=constraints.destination,
-            constraints=constraints.model_dump(),
-            keywords=keywords,
-            raise_on_all_failed=True,  # 全失敗時は例外
+            constraints=constraints,
+            wishes=wishes,
+            max_iterations=2,
         )
 
-        # ステータスに応じた出力サマリーを作成
-        status = search_result.status
+        await self._record_event(
+            db,
+            plan_run_id,
+            step_name="search_phase1",
+            agent_name="SearchReasoningLoop",
+            input_summary=f"destination: {constraints.destination}, categories: 4",
+            output_summary=f"total_results: {phase1_result.status.total_results}, "
+            f"failed: {phase1_result.status.failed_categories}",
+            latency_ms=int((time.time() - start_time) * 1000),
+        )
+
+        # Phase 2: 横断評価
+        phase2_start = time.time()
+        logger.info("Phase 2: Cross-category evaluation")
+        evaluation = await search_evaluator_agent.evaluate(
+            search_results=phase1_result.results,
+            constraints=constraints,
+            wishes=wishes,
+        )
+
+        await self._record_event(
+            db,
+            plan_run_id,
+            step_name="search_phase2_evaluate",
+            agent_name="SearchEvaluatorAgent",
+            input_summary=f"categories: {list(phase1_result.results.keys())}",
+            output_summary=f"sufficient: {evaluation.sufficient_categories}, "
+            f"insufficient: {[ic.category for ic in evaluation.insufficient_categories]}",
+            latency_ms=int((time.time() - phase2_start) * 1000),
+        )
+
+        # 不足カテゴリの再検索（最大1回の追加ラウンド）
+        if evaluation.has_insufficient:
+            supplement_start = time.time()
+            insufficient_categories = []
+            hints_per_category = {}
+
+            for ic in evaluation.insufficient_categories:
+                try:
+                    cat = POICategory(ic.category)
+                    insufficient_categories.append(cat)
+                    hints_per_category[ic.category] = ic.hints
+                except ValueError:
+                    logger.warning(f"Unknown category in evaluation: {ic.category}")
+
+            if insufficient_categories:
+                logger.info(
+                    f"Phase 2 supplement: re-searching {[c.value for c in insufficient_categories]}"
+                )
+                supplemental_result = await search_with_reasoning(
+                    destination=constraints.destination,
+                    constraints=constraints,
+                    wishes=wishes,
+                    categories=insufficient_categories,
+                    hints_per_category=hints_per_category,
+                    max_iterations=2,
+                )
+
+                # 結果をマージ
+                phase1_result = self._merge_search_results(phase1_result, supplemental_result)
+
+                await self._record_event(
+                    db,
+                    plan_run_id,
+                    step_name="search_phase2_supplement",
+                    agent_name="SearchReasoningLoop",
+                    input_summary=f"re-search: {[c.value for c in insufficient_categories]}",
+                    output_summary=f"supplemental_results: {supplemental_result.status.total_results}",
+                    latency_ms=int((time.time() - supplement_start) * 1000),
+                )
+
+        # 最終ログ
+        total_time = int((time.time() - start_time) * 1000)
+        status = phase1_result.status
         output_parts = [f"total_results: {status.total_results}"]
         if status.partial_failure:
             output_parts.append(f"partial_failure: {status.failed_categories}")
@@ -305,13 +367,61 @@ class TravelPlanningOrchestrator:
             db,
             plan_run_id,
             step_name="search",
-            agent_name="SearchAgents",
+            agent_name="HybridSearchPipeline",
             input_summary=f"destination: {constraints.destination}",
             output_summary=", ".join(output_parts),
-            latency_ms=int((time.time() - start_time) * 1000),
+            latency_ms=total_time,
         )
 
-        return search_result.results
+        return phase1_result.results
+
+    def _merge_search_results(
+        self,
+        primary: SearchAllResult,
+        supplemental: SearchAllResult,
+    ) -> SearchAllResult:
+        """2つの検索結果をマージ（supplementalで不足カテゴリを補完）"""
+        merged_results = dict(primary.results)
+
+        for category, result in supplemental.results.items():
+            if category in merged_results:
+                existing = merged_results[category]
+                # 既存のアイテム名のセット
+                existing_names = {item.name for item in existing.items}
+                # 重複しないアイテムを追加
+                new_items = [
+                    item for item in result.items
+                    if item.name not in existing_names
+                ]
+                merged_items = existing.items + new_items
+                merged_results[category] = SearchResult(
+                    category=category,
+                    query=f"{existing.query} + supplement",
+                    items=merged_items,
+                    source="tavily+reasoning",
+                    search_time_ms=existing.search_time_ms + result.search_time_ms,
+                )
+            else:
+                merged_results[category] = result
+
+        # ステータスを再計算
+        merged_status = SearchStatus(total_categories=len(merged_results))
+        for category, result in merged_results.items():
+            cat_name = category.value
+            if result.items:
+                merged_status.successful_categories.append(cat_name)
+            else:
+                # 結果が空でも成功とみなす（検索自体は成功）
+                merged_status.successful_categories.append(cat_name)
+            merged_status.total_results += len(result.items)
+
+        merged_status.all_failed = merged_status.total_results == 0
+        merged_status.partial_failure = (
+            len(primary.status.failed_categories) > 0
+            and not merged_status.all_failed
+        )
+
+        return SearchAllResult(results=merged_results, status=merged_status)
 
     async def _step_normalize(
         self,
@@ -404,6 +514,7 @@ class TravelPlanningOrchestrator:
                 activities=ranked_pois.get(POICategory.ACTIVITY, []),
                 foods=ranked_pois.get(POICategory.FOOD, []),
                 hotels=ranked_pois.get(POICategory.HOTEL, []),
+                transportation=ranked_pois.get(POICategory.TRANSPORTATION, []),
                 user_profile_summary=user_profile_summary,
             )
         )

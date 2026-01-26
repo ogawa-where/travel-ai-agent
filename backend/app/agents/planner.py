@@ -9,6 +9,7 @@ import json
 import logging
 import re
 
+from app.core.exceptions import LLMParseError
 from app.schemas.travel_planning import (
     DayPlan,
     Itinerary,
@@ -33,6 +34,7 @@ SYSTEM_PROMPT = """あなたは旅行計画の専門家です。
 3. 1日の活動は朝から夜まで、適度な休憩を入れる
 4. 食事（朝・昼・夜）を適切に配置する
 5. 宿泊先は毎晩必要
+6. days配列の要素数は指定された日数と完全一致させること
 
 出力は以下のJSON形式で返してください：
 {
@@ -99,6 +101,9 @@ PLANNER_PROMPT = """以下の条件で旅程を作成してください。
 【候補POI（宿泊）】
 {hotel_pois}
 
+【候補POI（交通・アクセス）】
+{transportation_pois}
+
 {profile_context}
 
 上記を考慮して、最適な旅程をJSON形式で出力してください。
@@ -113,33 +118,93 @@ class PlannerAgent:
         """
         旅程を生成
 
+        LLM呼び出し → JSONパース → バリデーション を一体のリトライループで実行。
+        JSONパース失敗や0日旅程もリトライ対象とする。
+
         Args:
             input_data: プランナー入力
 
         Returns:
             生成された旅程
         """
-        # プロンプトを構築
         prompt = self._build_prompt(input_data)
+        max_retries = 3
+        last_error = None
 
-        # LLM呼び出し
-        response = await self._call_llm_with_retry(prompt)
+        for attempt in range(max_retries):
+            try:
+                # 1. LLM呼び出し
+                current_prompt = prompt
+                if attempt > 0:
+                    expected_days = input_data.constraints.duration_days
+                    days_instruction = ""
+                    if expected_days:
+                        days_instruction = (
+                            f"days配列は必ず{expected_days}日分（{expected_days}要素）にしてください。"
+                        )
+                    current_prompt = (
+                        prompt
+                        + "\n\n注意: 必ず有効なJSON形式で出力してください。"
+                        f"daysは1日以上含めてください。{days_instruction}"
+                        "JSONのみを出力し、他の説明は不要です。"
+                    )
 
-        # JSONパース
-        parsed = self._parse_response(response)
+                response = await llm_gateway.generate(
+                    prompt=current_prompt,
+                    tier=ModelTier.HEAVY,
+                    system_prompt=SYSTEM_PROMPT,
+                    temperature=0.7,
+                    max_tokens=4096,
+                    agent_name="planner",
+                )
 
-        # Itineraryに変換
-        itinerary = self._convert_to_itinerary(parsed)
+                # 2. JSONパース（失敗時は例外）
+                parsed = self._parse_response(response)
 
-        # スコアを計算
-        score, score_breakdown = self._calculate_score(
-            itinerary, input_data.constraints, input_data.wishes
-        )
+                # 3. バリデーション: daysが空なら再試行
+                days = parsed.get("days", [])
+                if not days:
+                    raise LLMParseError(
+                        message="Planner returned empty days array",
+                        raw_output=response[:500],
+                        attempts=attempt + 1,
+                    )
 
-        return PlannerOutput(
-            itinerary=itinerary,
-            score=score,
-            score_breakdown=score_breakdown,
+                # 3b. 日数一致チェック
+                expected_days = input_data.constraints.duration_days
+                if expected_days and len(days) != expected_days:
+                    raise LLMParseError(
+                        message=(
+                            f"Planner returned {len(days)} days "
+                            f"but expected {expected_days} days"
+                        ),
+                        raw_output=response[:500],
+                        attempts=attempt + 1,
+                    )
+
+                # 4. Itineraryに変換
+                itinerary = self._convert_to_itinerary(parsed)
+
+                # 5. スコアを計算
+                score, score_breakdown = self._calculate_score(
+                    itinerary, input_data.constraints, input_data.wishes
+                )
+
+                return PlannerOutput(
+                    itinerary=itinerary,
+                    score=score,
+                    score_breakdown=score_breakdown,
+                )
+
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"Planner attempt {attempt + 1}/{max_retries} failed: {e}"
+                )
+
+        raise LLMParseError(
+            message=f"Planner failed after {max_retries} attempts: {last_error}",
+            attempts=max_retries,
         )
 
     def _build_prompt(self, input_data: PlannerInput) -> str:
@@ -161,6 +226,7 @@ class PlannerAgent:
         activity_pois = self._format_poi_list(input_data.activities)
         food_pois = self._format_poi_list(input_data.foods)
         hotel_pois = self._format_poi_list(input_data.hotels)
+        transportation_pois = self._format_poi_list(input_data.transportation)
 
         # プロフィールコンテキスト
         profile_context = ""
@@ -202,6 +268,7 @@ class PlannerAgent:
             activity_pois=activity_pois,
             food_pois=food_pois,
             hotel_pois=hotel_pois,
+            transportation_pois=transportation_pois,
             profile_context=profile_context,
         )
 
@@ -223,38 +290,12 @@ class PlannerAgent:
 
         return "\n".join(lines)
 
-    async def _call_llm_with_retry(
-        self,
-        prompt: str,
-        max_retries: int = 3,
-    ) -> str:
-        """リトライ付きLLM呼び出し"""
-        last_error = None
-
-        for attempt in range(max_retries):
-            try:
-                response = await llm_gateway.generate(
-                    prompt=prompt,
-                    tier=ModelTier.HEAVY,  # 複雑な推論なので重量モデル
-                    system_prompt=SYSTEM_PROMPT,
-                    temperature=0.7,
-                    max_tokens=4096,
-                    agent_name="planner",
-                )
-                return response
-            except Exception as e:
-                last_error = e
-                logger.warning(
-                    f"Planner LLM call failed (attempt {attempt + 1}/{max_retries}): {e}"
-                )
-
-                if attempt < max_retries - 1:
-                    prompt = prompt + "\n\n必ず有効なJSON形式で出力してください。"
-
-        raise RuntimeError(f"Planner failed after {max_retries} attempts: {last_error}")
-
     def _parse_response(self, response: str) -> dict:
-        """LLMレスポンスからJSONをパース"""
+        """LLMレスポンスからJSONをパース
+
+        Raises:
+            LLMParseError: JSONパースに失敗した場合
+        """
         # JSONブロックを抽出
         json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
         if json_match:
@@ -267,7 +308,10 @@ class PlannerAgent:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse planner response: {e}")
             logger.debug(f"Raw response: {response}")
-            return {"title": "旅程", "summary": "", "days": [], "highlights": []}
+            raise LLMParseError(
+                message=f"Failed to parse planner response: {e}",
+                raw_output=response[:500],
+            )
 
     def _convert_to_itinerary(self, parsed: dict) -> Itinerary:
         """パースされたJSONをItineraryに変換"""
@@ -371,12 +415,22 @@ class PlannerAgent:
                 budget_score = max(0, 2 - over_ratio)  # 2倍超えで0
         scores["budget"] = budget_score
 
+        # 5. 日数一致度
+        duration_match = 1.0
+        if constraints.duration_days:
+            if len(itinerary.days) == constraints.duration_days:
+                duration_match = 1.0
+            else:
+                duration_match = 0.0
+        scores["duration_match"] = duration_match
+
         # 総合スコア（重み付け平均）
         weights = {
-            "completeness": 0.3,
-            "accommodation": 0.25,
-            "meals": 0.25,
-            "budget": 0.2,
+            "completeness": 0.25,
+            "accommodation": 0.2,
+            "meals": 0.2,
+            "budget": 0.15,
+            "duration_match": 0.2,
         }
         total_score = sum(scores[k] * weights[k] for k in weights)
 

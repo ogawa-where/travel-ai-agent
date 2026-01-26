@@ -7,13 +7,18 @@ from app.agents.search_agents import (
     ActivitySearchAgent,
     FoodSearchAgent,
     HotelSearchAgent,
+    TransportationSearchAgent,
     SearchAllResult,
+    SearchReasoningLoop,
     SearchStatus,
     activity_search_agent,
     food_search_agent,
     hotel_search_agent,
+    transportation_search_agent,
     search_all_categories,
+    search_with_reasoning,
 )
+from app.agents.search_evaluator import SearchEvaluatorAgent, search_evaluator_agent
 from app.agents.summarizer import SummarizerAgent, summarizer_agent
 from app.agents.translator import TranslatorAgent, translator_agent
 
@@ -35,9 +40,15 @@ __all__ = [
     "activity_search_agent",
     "food_search_agent",
     "hotel_search_agent",
+    "TransportationSearchAgent",
+    "transportation_search_agent",
     "search_all_categories",
+    "search_with_reasoning",
     "SearchAllResult",
+    "SearchReasoningLoop",
     "SearchStatus",
+    "SearchEvaluatorAgent",
+    "search_evaluator_agent",
     "RerankAgent",
     "rerank_agent",
     "PlannerAgent",

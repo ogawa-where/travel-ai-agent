@@ -101,6 +101,97 @@ class TestPlannerPromptBuilding:
         assert "文化体験にマッチ" in prompt
 
 
+class TestPlannerTransportationPOI:
+    """交通POIプロンプトのテスト"""
+
+    def test_build_prompt_with_transportation_pois(self):
+        """交通POI付きプロンプト"""
+        agent = PlannerAgent()
+        transport_poi = POIRanked(
+            name="京都駅バスターミナル",
+            category="transportation",
+            description="市内バスの拠点",
+            match_reasons=["移動拠点"],
+            relevance_score=0.8,
+            preference_score=0.7,
+            final_score=0.75,
+        )
+        input_data = PlannerInput(
+            constraints=TravelConstraints(destination="京都"),
+            wishes=TravelWishes(),
+            activities=[],
+            foods=[],
+            hotels=[],
+            transportation=[transport_poi],
+        )
+        prompt = agent._build_prompt(input_data)
+        assert "交通・アクセス" in prompt
+        assert "京都駅バスターミナル" in prompt
+        assert "市内バスの拠点" in prompt
+
+    def test_build_prompt_empty_transportation(self):
+        """交通POIなしのプロンプト"""
+        agent = PlannerAgent()
+        input_data = PlannerInput(
+            constraints=TravelConstraints(destination="京都"),
+            wishes=TravelWishes(),
+            activities=[],
+            foods=[],
+            hotels=[],
+            transportation=[],
+        )
+        prompt = agent._build_prompt(input_data)
+        assert "交通・アクセス" in prompt
+        assert "候補なし" in prompt
+
+
+class TestPlannerDurationScore:
+    """日数一致スコアのテスト"""
+
+    def test_duration_match_score_match(self):
+        """日数一致時のスコア"""
+        agent = PlannerAgent()
+        itinerary = Itinerary(
+            title="Test", summary="",
+            days=[
+                DayPlan(day_number=1, items=[]),
+                DayPlan(day_number=2, items=[]),
+            ],
+        )
+        constraints = TravelConstraints(destination="京都", duration_days=2)
+        wishes = TravelWishes()
+        _, breakdown = agent._calculate_score(itinerary, constraints, wishes)
+        assert breakdown["duration_match"] == 1.0
+
+    def test_duration_match_score_mismatch(self):
+        """日数不一致時のスコア"""
+        agent = PlannerAgent()
+        itinerary = Itinerary(
+            title="Test", summary="",
+            days=[
+                DayPlan(day_number=1, items=[]),
+                DayPlan(day_number=2, items=[]),
+                DayPlan(day_number=3, items=[]),
+            ],
+        )
+        constraints = TravelConstraints(destination="京都", duration_days=2)
+        wishes = TravelWishes()
+        _, breakdown = agent._calculate_score(itinerary, constraints, wishes)
+        assert breakdown["duration_match"] == 0.0
+
+    def test_duration_match_score_no_constraint(self):
+        """日数制約なし時のスコア"""
+        agent = PlannerAgent()
+        itinerary = Itinerary(
+            title="Test", summary="",
+            days=[DayPlan(day_number=1, items=[])],
+        )
+        constraints = TravelConstraints(destination="京都")
+        wishes = TravelWishes()
+        _, breakdown = agent._calculate_score(itinerary, constraints, wishes)
+        assert breakdown["duration_match"] == 1.0
+
+
 class TestPlannerFormatPOIList:
     """POIリストのフォーマットテスト"""
 
@@ -179,12 +270,13 @@ class TestPlannerResponseParsing:
         assert parsed["title"] == "京都の旅"
 
     def test_parse_invalid_json(self):
-        """無効なJSON"""
+        """無効なJSON → LLMParseErrorを発生"""
+        from app.core.exceptions import LLMParseError
+
         agent = PlannerAgent()
         response = "This is not valid JSON"
-        parsed = agent._parse_response(response)
-        assert parsed["title"] == "旅程"
-        assert parsed["days"] == []
+        with pytest.raises(LLMParseError):
+            agent._parse_response(response)
 
 
 # =============================================================================
@@ -266,14 +358,15 @@ class TestPlannerScoreCalculation:
 
         score, breakdown = agent._calculate_score(itinerary, constraints, wishes)
 
-        # 空の旅程でも budget score は1.0（予算制約なし）
-        # weights: completeness=0.3, accommodation=0.25, meals=0.25, budget=0.2
-        # score = 0*0.3 + 0*0.25 + 0*0.25 + 1.0*0.2 = 0.2
+        # 空の旅程でも budget, duration_match は1.0（制約なし）
+        # weights: completeness=0.25, accommodation=0.2, meals=0.2, budget=0.15, duration_match=0.2
+        # score = 0*0.25 + 0*0.2 + 0*0.2 + 1.0*0.15 + 1.0*0.2 = 0.35
         assert breakdown["completeness"] == 0.0
         assert breakdown["accommodation"] == 0.0
         assert breakdown["meals"] == 0.0
         assert breakdown["budget"] == 1.0  # 予算制約なしで1.0
-        assert score == pytest.approx(0.2)
+        assert breakdown["duration_match"] == 1.0  # 日数制約なしで1.0
+        assert score == pytest.approx(0.35)
 
     def test_score_perfect_itinerary(self):
         """完璧な旅程のスコア"""
@@ -312,6 +405,7 @@ class TestPlannerScoreCalculation:
         )
         constraints = TravelConstraints(
             destination="京都",
+            duration_days=1,
             budget_total=60000,
         )
         wishes = TravelWishes()
@@ -322,6 +416,7 @@ class TestPlannerScoreCalculation:
         assert breakdown["accommodation"] == 1.0
         assert breakdown["meals"] == 1.0
         assert breakdown["budget"] == 1.0
+        assert breakdown["duration_match"] == 1.0
         assert score == pytest.approx(1.0)
 
     def test_score_over_budget(self):
@@ -380,9 +475,20 @@ class TestPlannerLLMIntegration:
                             "poi": {"name": "金閣寺", "category": "activity"},
                         }
                     ],
-                }
+                },
+                {
+                    "day_number": 2,
+                    "theme": "文化体験",
+                    "items": [
+                        {
+                            "time_start": "09:00",
+                            "time_end": "11:00",
+                            "poi": {"name": "清水寺", "category": "activity"},
+                        }
+                    ],
+                },
             ],
-            "highlights": ["金閣寺"],
+            "highlights": ["金閣寺", "清水寺"],
         })
 
         with patch("app.agents.planner.llm_gateway") as mock_gateway:
@@ -394,8 +500,8 @@ class TestPlannerLLMIntegration:
         assert "completeness" in output.score_breakdown
 
     @pytest.mark.asyncio
-    async def test_plan_retry_on_failure(self):
-        """失敗時のリトライ"""
+    async def test_plan_retry_on_llm_failure(self):
+        """LLM呼び出し失敗時のリトライ"""
         agent = PlannerAgent()
         input_data = PlannerInput(
             constraints=TravelConstraints(destination="京都"),
@@ -412,7 +518,10 @@ class TestPlannerLLMIntegration:
             call_count += 1
             if call_count < 3:
                 raise Exception("API Error")
-            return json.dumps({"title": "Test", "days": []})
+            return json.dumps({
+                "title": "Test",
+                "days": [{"day_number": 1, "theme": "観光", "items": []}],
+            })
 
         with patch("app.agents.planner.llm_gateway") as mock_gateway:
             mock_gateway.generate = mock_generate
@@ -420,10 +529,122 @@ class TestPlannerLLMIntegration:
 
         assert call_count == 3
         assert output.itinerary.title == "Test"
+        assert len(output.itinerary.days) == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_retry_on_parse_failure(self):
+        """JSONパース失敗時のリトライ"""
+        agent = PlannerAgent()
+        input_data = PlannerInput(
+            constraints=TravelConstraints(destination="京都"),
+            wishes=TravelWishes(),
+            activities=[],
+            foods=[],
+            hotels=[],
+        )
+
+        call_count = 0
+
+        async def mock_generate(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                return "This is not valid JSON"
+            return json.dumps({
+                "title": "Retry Success",
+                "days": [{"day_number": 1, "theme": "観光", "items": []}],
+            })
+
+        with patch("app.agents.planner.llm_gateway") as mock_gateway:
+            mock_gateway.generate = mock_generate
+            output = await agent.plan(input_data)
+
+        assert call_count == 2
+        assert output.itinerary.title == "Retry Success"
+
+    @pytest.mark.asyncio
+    async def test_plan_retry_on_empty_days(self):
+        """空のdays配列時のリトライ"""
+        agent = PlannerAgent()
+        input_data = PlannerInput(
+            constraints=TravelConstraints(destination="京都"),
+            wishes=TravelWishes(),
+            activities=[],
+            foods=[],
+            hotels=[],
+        )
+
+        call_count = 0
+
+        async def mock_generate(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                return json.dumps({"title": "Empty", "days": []})
+            return json.dumps({
+                "title": "Non-empty",
+                "days": [{"day_number": 1, "theme": "観光", "items": []}],
+            })
+
+        with patch("app.agents.planner.llm_gateway") as mock_gateway:
+            mock_gateway.generate = mock_generate
+            output = await agent.plan(input_data)
+
+        assert call_count == 2
+        assert output.itinerary.title == "Non-empty"
+        assert len(output.itinerary.days) == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_retry_on_duration_mismatch(self):
+        """日数不一致時のリトライ"""
+        agent = PlannerAgent()
+        input_data = PlannerInput(
+            constraints=TravelConstraints(
+                destination="京都",
+                duration_days=2,
+            ),
+            wishes=TravelWishes(),
+            activities=[],
+            foods=[],
+            hotels=[],
+        )
+
+        call_count = 0
+
+        async def mock_generate(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                # 1回目: 3日分を返す（2日のはずなのに）
+                return json.dumps({
+                    "title": "京都3日間",
+                    "days": [
+                        {"day_number": 1, "theme": "観光", "items": []},
+                        {"day_number": 2, "theme": "文化", "items": []},
+                        {"day_number": 3, "theme": "自然", "items": []},
+                    ],
+                })
+            # 2回目: 正しく2日分
+            return json.dumps({
+                "title": "京都2日間",
+                "days": [
+                    {"day_number": 1, "theme": "観光", "items": []},
+                    {"day_number": 2, "theme": "文化", "items": []},
+                ],
+            })
+
+        with patch("app.agents.planner.llm_gateway") as mock_gateway:
+            mock_gateway.generate = mock_generate
+            output = await agent.plan(input_data)
+
+        assert call_count == 2
+        assert len(output.itinerary.days) == 2
 
     @pytest.mark.asyncio
     async def test_plan_max_retries_exceeded(self):
         """最大リトライ回数超過"""
+        from app.core.exceptions import LLMParseError
+
         agent = PlannerAgent()
         input_data = PlannerInput(
             constraints=TravelConstraints(destination="京都"),
@@ -436,7 +657,7 @@ class TestPlannerLLMIntegration:
         with patch("app.agents.planner.llm_gateway") as mock_gateway:
             mock_gateway.generate = AsyncMock(side_effect=Exception("API Error"))
 
-            with pytest.raises(RuntimeError) as exc_info:
+            with pytest.raises(LLMParseError) as exc_info:
                 await agent.plan(input_data)
 
         assert "3 attempts" in str(exc_info.value)

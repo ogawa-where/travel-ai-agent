@@ -131,6 +131,7 @@ class TavilyClient:
             "activity": "観光 体験 アクティビティ おすすめ",
             "food": "グルメ レストラン 食事 おすすめ",
             "hotel": "ホテル 宿泊 旅館 おすすめ",
+            "transportation": "交通 アクセス 移動手段 電車 バス タクシー レンタカー",
         }
 
         base_terms = category_terms.get(category, "観光")

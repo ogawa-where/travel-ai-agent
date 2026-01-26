@@ -15,6 +15,7 @@ class POICategory(str, Enum):
     ACTIVITY = "activity"  # 体験・観光
     FOOD = "food"  # 食
     HOTEL = "hotel"  # 宿
+    TRANSPORTATION = "transportation"  # 交通・アクセス
 
 
 class PlanRequestStatus(str, Enum):
@@ -319,6 +320,7 @@ class PlannerInput(BaseModel):
     activities: list[POIRanked] = Field(default_factory=list)
     foods: list[POIRanked] = Field(default_factory=list)
     hotels: list[POIRanked] = Field(default_factory=list)
+    transportation: list[POIRanked] = Field(default_factory=list)
     user_profile_summary: str = ""
 
 
@@ -448,3 +450,36 @@ class CategorySearchResponse(BaseModel):
     total_count: int = 0
     search_time_ms: int = 0
     source: str = "tavily"
+
+
+# =============================================================================
+# 検索推論ループ用スキーマ
+# =============================================================================
+
+
+class SearchVerdict(BaseModel):
+    """検索結果の評価（verifyステップの出力）"""
+
+    sufficient: bool = False
+    reason: str = ""
+    missing_aspects: list[str] = Field(default_factory=list)
+    suggested_queries: list[str] = Field(default_factory=list)
+
+
+class InsufficientCategory(BaseModel):
+    """不足カテゴリの情報"""
+
+    category: str
+    reason: str = ""
+    hints: list[str] = Field(default_factory=list)
+
+
+class CrossCategoryEvaluation(BaseModel):
+    """Phase 2: オーケストレーター横断評価の出力"""
+
+    sufficient_categories: list[str] = Field(default_factory=list)
+    insufficient_categories: list[InsufficientCategory] = Field(default_factory=list)
+
+    @property
+    def has_insufficient(self) -> bool:
+        return len(self.insufficient_categories) > 0

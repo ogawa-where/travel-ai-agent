@@ -250,6 +250,7 @@ class LLMGateway:
         self,
         role: WorkerRole = WorkerRole.ANY,
         exclude: set[str] | None = None,
+        preferred_host: str | None = None,
     ) -> Worker | None:
         """
         役割に基づいてワーカーを選択（ラウンドロビン）
@@ -257,11 +258,22 @@ class LLMGateway:
         Args:
             role: 必要な役割
             exclude: 除外するワーカーホストのセット
+            preferred_host: 優先するワーカーホスト（指定時はそのホストを直接使用）
 
         Returns:
             選択されたワーカー、なければNone
         """
         exclude = exclude or set()
+
+        # preferred_host が指定されている場合、そのホストを直接使用
+        if preferred_host:
+            for w in self.workers:
+                if w.host == preferred_host and w.healthy and w.host not in exclude:
+                    return w
+            # preferred_host が見つからない/不健全な場合はフォールバック
+            logger.warning(
+                f"Preferred host {preferred_host} not available, falling back to role-based selection"
+            )
 
         # 指定された役割のワーカーを優先
         candidates = [
@@ -368,6 +380,8 @@ class LLMGateway:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         agent_name: str | None = None,
+        worker_host: str | None = None,
+        model_override: str | None = None,
     ) -> str:
         """
         Ollamaを使用してテキストを生成
@@ -379,6 +393,8 @@ class LLMGateway:
             temperature: 温度
             max_tokens: 最大トークン数
             agent_name: エージェント名（役割ベースルーティング用）
+            worker_host: 直接指定するワーカーホスト（検索フェーズ並列化用）
+            model_override: モデル名を直接指定（tier設定を上書き）
 
         Returns:
             生成されたテキスト
@@ -395,17 +411,17 @@ class LLMGateway:
             role = WorkerRole(tier.value)
 
         # まず健全なワーカーがあるか確認
-        worker = self._select_worker(role=role)
+        worker = self._select_worker(role=role, preferred_host=worker_host)
         if not worker:
             # 全ワーカーをチェックしてみる
             await self.check_all_workers(force=True)
-            worker = self._select_worker(role=role)
+            worker = self._select_worker(role=role, preferred_host=worker_host)
             if not worker:
                 raise LLMUnavailableError(
                     details={"workers": [w.host for w in self.workers], "required_role": role.value}
                 )
 
-        model = self._get_model_name(tier)
+        model = model_override or self._get_model_name(tier)
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -427,10 +443,10 @@ class LLMGateway:
         for attempt in range(settings.llm_max_retries):
             # ワーカーが変わった可能性があるので再選択
             if attempt > 0:
-                worker = self._select_worker(role=role, exclude=tried_workers)
+                worker = self._select_worker(role=role, exclude=tried_workers, preferred_host=worker_host)
                 if not worker:
                     # 除外なしで再選択
-                    worker = self._select_worker(role=role)
+                    worker = self._select_worker(role=role, preferred_host=worker_host)
                     if not worker:
                         break
 
@@ -501,6 +517,8 @@ class LLMGateway:
         system_prompt: str | None = None,
         temperature: float = 0.3,
         agent_name: str | None = None,
+        worker_host: str | None = None,
+        model_override: str | None = None,
     ) -> dict:
         """
         JSON出力を生成（パース失敗時にリトライ）
@@ -513,6 +531,8 @@ class LLMGateway:
             system_prompt: システムプロンプト
             temperature: 温度
             agent_name: エージェント名（役割ベースルーティング用）
+            worker_host: 直接指定するワーカーホスト（検索フェーズ並列化用）
+            model_override: モデル名を直接指定（tier設定を上書き）
 
         Returns:
             パースされたJSON辞書
@@ -537,6 +557,8 @@ class LLMGateway:
                     system_prompt=json_system,
                     temperature=temperature,
                     agent_name=agent_name,
+                    worker_host=worker_host,
+                    model_override=model_override,
                 )
                 raw_responses.append(response)
 

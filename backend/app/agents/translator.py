@@ -53,6 +53,12 @@ SYSTEM_PROMPT = """あなたは旅行計画のアシスタントです。
   "clarification_needed": ["確認が必要な項目のリスト"]
 }
 
+【日数の解釈ルール（厳守）】
+- 「X泊Y日」→ duration_days = Y（日の数）
+  例: 「1泊2日」→ 2, 「2泊3日」→ 3
+- 「X日間」→ duration_days = X
+- 「X泊」のみ → duration_days = X + 1
+
 注意：
 - 明示されていない項目はnullまたは空リストにする
 - 予算は数値のみ（単位なし）
