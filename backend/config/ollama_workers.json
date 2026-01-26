@@ -1,16 +1,10 @@
 {
   "workers": [
     {
-      "host": "172.28.208.213:11434",
-      "role": "heavy",
-      "max_concurrent": 1,
-      "description": "mafu - Control server, primary heavy tasks (Planner, Explainer, ProfileUpdater)"
-    },
-    {
       "host": "172.28.208.214:11434",
       "role": "heavy",
       "max_concurrent": 1,
-      "description": "nubia - Heavy backup"
+      "description": "nubia - Primary heavy tasks (Planner, Explainer, ProfileUpdater)"
     },
     {
       "host": "172.28.208.217:11434",
