@@ -12,7 +12,7 @@ CLAUDE.md セクション12の要件:
 import pytest
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 # =============================================================================
@@ -112,7 +112,7 @@ class MockMetricsCollector:
         metrics = self._agent_metrics[agent_name]
         metrics.call_count += 1
         metrics.total_latency_ms += latency_ms
-        metrics.last_called = datetime.now(UTC)
+        metrics.last_called = datetime.now(timezone.utc).replace(tzinfo=None)
         if not success:
             metrics.error_count += 1
 
@@ -194,7 +194,7 @@ class MockRunArtifact:
     run_id: str
     artifact_type: str
     data: dict | str
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 class MockArtifactStorage:

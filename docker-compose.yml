@@ -24,7 +24,9 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
@@ -36,16 +38,20 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-travel_agent}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-travel} -d ${POSTGRES_DB:-travel_agent}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
   osrm:
     image: osrm/osrm-backend:latest
     ports:
       - "5001:5000"
     volumes:
-      - osrm_data:/data
+      - ./osrm-data:/data:ro
     command: osrm-routed --algorithm mld /data/japan-latest.osrm
     restart: unless-stopped
 
 volumes:
   postgres_data:
-  osrm_data:

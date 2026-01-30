@@ -7,7 +7,12 @@ CLAUDE.md セクション4.1の責務を実装。
 
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+
+def _utcnow() -> datetime:
+    """timezone-naive な UTC 現在時刻（TIMESTAMP WITHOUT TIME ZONE 用）"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +49,8 @@ class TravelPlanningOrchestrator:
         request: TravelPlanRequest,
         user_profile_summary: str = "",
         preference_signals: list[dict] | None = None,
+        pre_constraints: TravelConstraints | None = None,
+        pre_wishes: TravelWishes | None = None,
     ) -> TravelPlan:
         """
         旅行企画フローを実行
@@ -53,6 +60,8 @@ class TravelPlanningOrchestrator:
             request: 旅行企画リクエスト
             user_profile_summary: ユーザープロフィール要約
             preference_signals: ユーザー嗜好シグナル
+            pre_constraints: フォームから直接変換された制約（指定時はTranslatorスキップ）
+            pre_wishes: フォームのfree_textから抽出された希望（任意）
 
         Returns:
             生成された旅行プラン
@@ -67,6 +76,7 @@ class TravelPlanningOrchestrator:
             config_snapshot={
                 "user_profile_summary_length": len(user_profile_summary),
                 "preference_signals_count": len(preference_signals),
+                "form_input": pre_constraints is not None,
             },
         )
         db.add(plan_run)
@@ -81,19 +91,40 @@ class TravelPlanningOrchestrator:
                     "raw_request": request.raw_request,
                     "user_profile_summary_length": len(user_profile_summary),
                     "preference_signals_count": len(preference_signals),
+                    "form_input": pre_constraints is not None,
                 },
             )
 
-            # ステップ1: 要求の構造化（Translator Agent）
-            translate_result = await self._step_translate(
-                db,
-                plan_run.id,
-                request.raw_request,
-                user_profile_summary,
-                preference_signals,
-            )
-            constraints = translate_result.constraints
-            wishes = translate_result.wishes
+            # ステップ1: 要求の構造化（pre_constraintsがある場合はTranslatorスキップ）
+            if pre_constraints is not None:
+                constraints = pre_constraints
+                wishes = pre_wishes or TravelWishes()
+                logger.info(
+                    f"Using pre-built constraints (form input): "
+                    f"destination={constraints.destination}, "
+                    f"duration={constraints.duration_days}日"
+                )
+                await self._record_event(
+                    db,
+                    plan_run.id,
+                    step_name="translate",
+                    agent_name="FormInput",
+                    input_summary="form-based constraints (Translator skipped)",
+                    output_summary=f"destination: {constraints.destination}, "
+                    f"duration: {constraints.duration_days}日",
+                    latency_ms=0,
+                    status="skipped",
+                )
+            else:
+                translate_result = await self._step_translate(
+                    db,
+                    plan_run.id,
+                    request.raw_request,
+                    user_profile_summary,
+                    preference_signals,
+                )
+                constraints = translate_result.constraints
+                wishes = translate_result.wishes
 
             # リクエストに構造化結果を保存
             request.constraints = constraints.model_dump()
@@ -198,7 +229,7 @@ class TravelPlanningOrchestrator:
             # リクエストとPlanRunを完了
             request.status = "completed"
             plan_run.status = "completed"
-            plan_run.completed_at = datetime.now(UTC)
+            plan_run.completed_at = _utcnow()
             plan_run.metrics = {
                 "total_time_ms": int((time.time() - start_time) * 1000),
                 "search_results_count": sum(
@@ -222,7 +253,7 @@ class TravelPlanningOrchestrator:
             logger.error(f"Travel planning failed: {e}")
             request.status = "failed"
             plan_run.status = "failed"
-            plan_run.completed_at = datetime.now(UTC)
+            plan_run.completed_at = _utcnow()
             plan_run.error_message = str(e)
             await db.commit()
             raise
@@ -340,7 +371,7 @@ class TravelPlanningOrchestrator:
                     wishes=wishes,
                     categories=insufficient_categories,
                     hints_per_category=hints_per_category,
-                    max_iterations=2,
+                    max_iterations=1,
                 )
 
                 # 結果をマージ

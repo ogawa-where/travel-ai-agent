@@ -485,3 +485,75 @@ class CrossCategoryEvaluation(BaseModel):
     @property
     def has_insufficient(self) -> bool:
         return len(self.insufficient_categories) > 0
+
+
+# =============================================================================
+# 構造化フォーム入力
+# =============================================================================
+
+
+class TravelPlanFormRequest(BaseModel):
+    """構造化フォームからの旅行企画リクエスト"""
+
+    user_id: str
+
+    # 必須フィールド
+    destination: str = Field(..., description="行き先（例: '京都府'）")
+    start_date: str = Field(..., description="開始日 (YYYY-MM-DD)")
+    end_date: str = Field(..., description="終了日 (YYYY-MM-DD)")
+
+    # 任意フィールド
+    departure_place: str | None = Field(default=None, description="出発地（例: '秋田県'）")
+    budget_total: int | None = Field(default=None, description="総予算（円）")
+    num_people: int = Field(default=1, ge=1, description="人数")
+    transportation: str | None = Field(
+        default=None, description="移動手段（例: '新幹線', 'レンタカー'）"
+    )
+    accommodation_type: str | None = Field(
+        default=None, description="宿泊タイプ（例: '旅館', 'ホテル'）"
+    )
+
+    # 自由記述（Translator AgentでWishes抽出）
+    free_text: str = Field(default="", description="自由な要望")
+
+    def to_constraints(self) -> TravelConstraints:
+        """フォーム入力をTravelConstraintsに直接変換（LLMバイパス）"""
+        d_start = datetime.strptime(self.start_date, "%Y-%m-%d")
+        d_end = datetime.strptime(self.end_date, "%Y-%m-%d")
+        duration = (d_end - d_start).days + 1
+
+        return TravelConstraints(
+            destination=self.destination,
+            start_date=self.start_date,
+            end_date=self.end_date,
+            duration_days=duration,
+            budget_total=self.budget_total,
+            num_people=self.num_people,
+            transportation=self.transportation or "",
+            other={
+                k: v
+                for k, v in {
+                    "departure_place": self.departure_place,
+                    "accommodation_type": self.accommodation_type,
+                }.items()
+                if v
+            },
+        )
+
+    def build_raw_request(self) -> str:
+        """検索エージェント向けの自然言語テキストを構築"""
+        parts = [f"{self.destination}への旅行"]
+        parts.append(f"期間: {self.start_date} 〜 {self.end_date}")
+        if self.departure_place:
+            parts.append(f"出発地: {self.departure_place}")
+        if self.budget_total:
+            parts.append(f"予算: {self.budget_total:,}円")
+        if self.num_people > 1:
+            parts.append(f"{self.num_people}人")
+        if self.transportation:
+            parts.append(f"移動手段: {self.transportation}")
+        if self.accommodation_type:
+            parts.append(f"宿泊: {self.accommodation_type}")
+        if self.free_text:
+            parts.append(self.free_text)
+        return "。".join(parts)

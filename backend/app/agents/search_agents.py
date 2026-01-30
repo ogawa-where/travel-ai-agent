@@ -548,25 +548,31 @@ class SearchReasoningLoop:
                 )
                 all_items.extend(new_items)
 
-                # 3. VERIFY: 結果をLLMで評価
-                verdict = await self._verify(
-                    category=category,
-                    destination=destination,
-                    constraints=constraints,
-                    wishes=wishes,
-                    items=all_items,
-                    hints=hints,
-                    worker_host=worker_host,
-                    model=model,
-                )
+                # 3. VERIFY: 結果をLLMで評価（最終イテレーションではスキップ）
+                if iteration < max_iterations - 1:
+                    verdict = await self._verify(
+                        category=category,
+                        destination=destination,
+                        constraints=constraints,
+                        wishes=wishes,
+                        items=all_items,
+                        hints=hints,
+                        worker_host=worker_host,
+                        model=model,
+                    )
 
-                logger.info(
-                    f"SearchReasoningLoop [{category.value}] iteration={iteration + 1}: "
-                    f"items={len(all_items)}, sufficient={verdict.sufficient}"
-                )
+                    logger.info(
+                        f"SearchReasoningLoop [{category.value}] iteration={iteration + 1}: "
+                        f"items={len(all_items)}, sufficient={verdict.sufficient}"
+                    )
 
-                if verdict.sufficient:
-                    break
+                    if verdict.sufficient:
+                        break
+                else:
+                    logger.info(
+                        f"SearchReasoningLoop [{category.value}] iteration={iteration + 1}: "
+                        f"items={len(all_items)}, final iteration (verify skipped)"
+                    )
 
             except Exception as e:
                 logger.warning(
@@ -652,46 +658,56 @@ JSON形式で2〜3個の検索クエリを出力してください。
         worker_host: str = "",
         model: str = "",
     ) -> list[POISearchResult]:
-        """Tavily検索を実行し、LLMでPOIを抽出"""
+        """Tavily検索を並列実行し、LLMでPOIをバッチ抽出"""
         agent = _get_agent_for_category(category)
-        all_items: list[POISearchResult] = []
 
-        for query_text in queries:
+        # 1. 全クエリのTavily検索を並列実行
+        tavily_tasks = [
+            tavily_client.search_for_travel(
+                destination=destination,
+                category=category.value,
+                keywords=query_text.split(),
+                max_results=10,
+            )
+            for query_text in queries
+        ]
+        raw_results_list = await asyncio.gather(*tavily_tasks, return_exceptions=True)
+
+        # 2. 全結果を結合（エラーはスキップ）
+        combined_results: list[dict] = []
+        for i, raw in enumerate(raw_results_list):
+            if isinstance(raw, Exception):
+                logger.warning(f"Search query failed: {queries[i]}: {raw}")
+                continue
+            combined_results.extend(raw.get("results", []))
+
+        if not combined_results:
+            return []
+
+        # 3. LLMベースPOI抽出をバッチで1回実行
+        if worker_host and model:
             try:
-                raw_results = await tavily_client.search_for_travel(
+                llm_pois = await self._extract_pois_with_llm(
+                    raw_results=combined_results[:20],
+                    category=category,
                     destination=destination,
-                    category=category.value,
-                    keywords=query_text.split(),
-                    max_results=10,
+                    worker_host=worker_host,
+                    model=model,
                 )
-                results_list = raw_results.get("results", [])
-
-                # LLMベースPOI抽出を試行
-                if results_list and worker_host and model:
-                    try:
-                        llm_pois = await self._extract_pois_with_llm(
-                            raw_results=results_list,
-                            category=category,
-                            destination=destination,
-                            worker_host=worker_host,
-                            model=model,
-                        )
-                        if llm_pois:
-                            all_items.extend(llm_pois)
-                            continue
-                    except Exception as e:
-                        logger.warning(
-                            f"LLM POI extraction failed for {category.value}, "
-                            f"falling back to rule-based: {e}"
-                        )
-
-                # フォールバック: 従来のルールベース抽出
-                for result in results_list:
-                    poi = agent._extract_poi_from_result(result)
-                    if poi:
-                        all_items.append(poi)
+                if llm_pois:
+                    return llm_pois
             except Exception as e:
-                logger.warning(f"Search query failed: {query_text}: {e}")
+                logger.warning(
+                    f"LLM POI extraction failed for {category.value}, "
+                    f"falling back to rule-based: {e}"
+                )
+
+        # 4. フォールバック: 従来のルールベース抽出
+        all_items: list[POISearchResult] = []
+        for result in combined_results:
+            poi = agent._extract_poi_from_result(result)
+            if poi:
+                all_items.append(poi)
 
         return all_items
 
@@ -718,9 +734,9 @@ JSON形式で2〜3個の検索クエリを出力してください。
         Returns:
             抽出されたPOIリスト
         """
-        # 検索結果を要約してプロンプトに渡す
+        # 検索結果を要約してプロンプトに渡す（バッチ対応: 最大20件）
         results_for_prompt = []
-        for i, result in enumerate(raw_results[:10]):
+        for i, result in enumerate(raw_results[:20]):
             title = result.get("title", "")
             content = result.get("content", "")[:300]
             results_for_prompt.append(
@@ -1054,22 +1070,23 @@ async def search_with_reasoning(
 
     # デフォルトルーティング（設定がない場合）
     import os
+    search_model = os.getenv("OLLAMA_MODEL_HEAVY", "qwen2.5:32b-instruct")
     default_routing = {
         "activity": {
             "host": os.getenv("OLLAMA_WORKER_HEAVY", "172.28.208.214:11434"),
-            "model": os.getenv("OLLAMA_MODEL_HEAVY", "qwen2.5:32b-instruct"),
+            "model": search_model,
         },
         "food": {
             "host": os.getenv("OLLAMA_WORKER_LIGHT", "172.28.208.217:11434"),
-            "model": os.getenv("OLLAMA_MODEL_LIGHT", "okamototk/llama-swallow:8b"),
+            "model": search_model,
         },
         "hotel": {
             "host": os.getenv("OLLAMA_WORKER_EMBED", "172.28.208.218:11434"),
-            "model": os.getenv("OLLAMA_MODEL_LIGHT", "okamototk/llama-swallow:8b"),
+            "model": search_model,
         },
         "transportation": {
             "host": os.getenv("OLLAMA_WORKER_MAFU", "172.28.208.213:11434"),
-            "model": os.getenv("OLLAMA_MODEL_LIGHT", "okamototk/llama-swallow:8b"),
+            "model": search_model,
         },
     }
 

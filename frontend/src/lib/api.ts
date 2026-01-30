@@ -222,6 +222,20 @@ interface AllCategorySearchResults {
   hotel: CategorySearchResponse | null
 }
 
+// 構造化フォーム入力
+interface TravelPlanFormData {
+  user_id: string
+  destination: string
+  start_date: string       // "YYYY-MM-DD"
+  end_date: string         // "YYYY-MM-DD"
+  departure_place?: string
+  budget_total?: number
+  num_people: number
+  transportation?: string
+  accommodation_type?: string
+  free_text: string
+}
+
 // ジオ情報付き旅程
 interface GeoEnrichedPOI {
   name: string
@@ -465,6 +479,18 @@ export const api = {
     return response.json()
   },
 
+  // 構造化フォームからプラン生成
+  async submitTravelForm(data: TravelPlanFormData): Promise<TravelChatResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/plan-with-form`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+    return response.json()
+  },
+
   // 全カテゴリ並列検索
   async searchAllCategories(request: CategorySearchRequest): Promise<AllCategorySearchResults> {
     const [activity, food, hotel] = await Promise.allSettled([
@@ -481,4 +507,4 @@ export const api = {
   },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData }

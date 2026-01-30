@@ -704,14 +704,13 @@ class TestSearchReasoningLoop:
         loop = SearchReasoningLoop()
 
         mock_gateway = MagicMock()
-        # 各イテレーション: reason + extract + verify の3コール
+        # iter 1: reason + extract + verify, iter 2: reason + extract (verify skipped on final)
         mock_gateway.generate_json = AsyncMock(side_effect=[
             {"queries": ["京都 観光"]},  # iter 1 reason
             {"pois": [{"name": "金閣寺", "location": "北区", "description": "test", "source_index": 0}]},  # iter 1 extract
             {"sufficient": False, "reason": "不足", "missing_aspects": ["自然系"], "suggested_queries": ["京都 自然"]},  # iter 1 verify
             {"queries": ["京都 自然 体験"]},  # iter 2 reason
             {"pois": [{"name": "嵐山竹林", "location": "右京区", "description": "test", "source_index": 0}]},  # iter 2 extract
-            {"sufficient": False, "reason": "まだ不足", "missing_aspects": [], "suggested_queries": []},  # iter 2 verify
         ])
         loop._gateway = mock_gateway
 
@@ -736,8 +735,8 @@ class TestSearchReasoningLoop:
         assert result.category == POICategory.ACTIVITY
         # 2イテレーション分のアイテムが蓄積
         assert len(result.items) == 2  # 各イテレーションで1件
-        # generate_json は6回呼ばれる（2イテレーション × (reason + extract + verify)）
-        assert mock_gateway.generate_json.call_count == 6
+        # generate_json は5回（最終イテレーションのverifyがスキップされる）
+        assert mock_gateway.generate_json.call_count == 5
 
     @pytest.mark.asyncio
     async def test_loop_with_hints(self):

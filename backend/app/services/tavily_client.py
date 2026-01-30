@@ -23,8 +23,10 @@ class TavilyClient:
 
     def __init__(self):
         self.api_key = os.getenv("TAVILY_API_KEY", "")
-        self._rate_limit_delay = 1.0  # レート制限（秒）
+        self._semaphore = asyncio.Semaphore(5)  # 同時リクエスト数制御
+        self._min_interval = 0.1  # バースト防止の最小インターバル（秒）
         self._last_request_time = 0.0
+        self._interval_lock = asyncio.Lock()
         self._timeout = 30.0  # タイムアウト（秒）
 
     async def search(
@@ -52,7 +54,7 @@ class TavilyClient:
             logger.warning("TAVILY_API_KEY not set, returning empty results")
             return {"results": [], "query": query, "error": "API key not configured"}
 
-        # レート制限
+        # セマフォ + バースト防止
         await self._apply_rate_limit()
 
         start_time = time.time()
@@ -106,6 +108,8 @@ class TavilyClient:
         except Exception as e:
             logger.error(f"Tavily search failed: {e}")
             return {"results": [], "query": query, "error": str(e)}
+        finally:
+            self._release_semaphore()
 
     async def search_for_travel(
         self,
@@ -157,14 +161,22 @@ class TavilyClient:
         )
 
     async def _apply_rate_limit(self):
-        """レート制限を適用"""
-        now = time.time()
-        elapsed = now - self._last_request_time
+        """セマフォ取得 + バースト防止の最小インターバルを適用"""
+        await self._semaphore.acquire()
+        try:
+            async with self._interval_lock:
+                now = time.time()
+                elapsed = now - self._last_request_time
+                if elapsed < self._min_interval:
+                    await asyncio.sleep(self._min_interval - elapsed)
+                self._last_request_time = time.time()
+        except BaseException:
+            self._semaphore.release()
+            raise
 
-        if elapsed < self._rate_limit_delay:
-            await asyncio.sleep(self._rate_limit_delay - elapsed)
-
-        self._last_request_time = time.time()
+    def _release_semaphore(self):
+        """セマフォを解放"""
+        self._semaphore.release()
 
 
 # Singleton instance

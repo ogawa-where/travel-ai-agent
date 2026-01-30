@@ -19,19 +19,23 @@ from app.schemas.travel_planning import (
     POIFeedbackResponse,
     POIFeedbackType,
     SearchQuery,
+    TranslateRequestInput,
     TravelChatRequest,
     TravelChatResponse,
     TravelPlanFeedbackRequest,
     TravelPlanFeedbackResponse,
+    TravelPlanFormRequest,
     TravelPlanRequestCreate,
     TravelPlanRequestResponse,
     TravelPlanResponse,
+    TravelWishes,
 )
 from app.agents.search_agents import (
     activity_search_agent,
     food_search_agent,
     hotel_search_agent,
 )
+from app.agents.translator import translator_agent
 from app.services.experience_extractor import experience_extractor
 from app.services.long_term_memory import long_term_memory
 from app.services.session_manager import session_manager
@@ -108,6 +112,130 @@ async def create_travel_plan(
     except Exception as e:
         logger.error(f"Failed to create travel plan: {e}")
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
+
+
+@router.post("/plan-with-form", response_model=TravelChatResponse)
+async def plan_with_form(
+    request: TravelPlanFormRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TravelChatResponse:
+    """
+    構造化フォームから直接旅行プランを生成
+
+    フォームの構造化フィールドはTranslator Agentをバイパスして
+    直接TravelConstraintsに変換する。free_textのみTranslator Agentで
+    TravelWishes を抽出する。
+    """
+    # ユーザーを取得
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.profile), selectinload(User.preference_signals))
+        .where(User.id == request.user_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # セッションを作成
+    session = await session_manager.create_session(
+        db, request.user_id, mode="travel_planning"
+    )
+
+    # フォームからconstraintsを直接変換（LLMバイパス）
+    constraints = request.to_constraints()
+
+    # free_textがあればTranslator Agentでwishesのみ抽出
+    wishes = None
+    if request.free_text.strip():
+        wishes = await _extract_wishes_only(
+            request.free_text,
+            user_profile_summary=user.profile.summary if user.profile else "",
+            preference_signals=[
+                {
+                    "category": s.category,
+                    "tag": s.tag,
+                    "weight": s.weight,
+                }
+                for s in (user.preference_signals or [])
+            ],
+        )
+
+    # raw_requestを構築（検索用テキスト）
+    raw_request = request.build_raw_request()
+
+    # TravelPlanRequestを作成
+    plan_request = TravelPlanRequest(
+        session_id=session.id,
+        user_id=request.user_id,
+        raw_request=raw_request,
+        status="pending",
+    )
+    db.add(plan_request)
+    await db.flush()
+
+    # ユーザーメッセージを保存
+    await session_manager.add_message(db, session.id, role="user", content=raw_request)
+
+    # プロフィール情報を準備
+    profile_summary = user.profile.summary if user.profile else ""
+    preference_signals = [
+        {
+            "category": s.category,
+            "tag": s.tag,
+            "weight": s.weight,
+            "evidence": s.evidence,
+        }
+        for s in (user.preference_signals or [])
+    ]
+
+    try:
+        # Orchestrator実行（pre_constraints + pre_wishesでTranslatorスキップ）
+        travel_plan = await travel_orchestrator.execute(
+            db=db,
+            request=plan_request,
+            user_profile_summary=profile_summary,
+            preference_signals=preference_signals,
+            pre_constraints=constraints,
+            pre_wishes=wishes,
+        )
+
+        assistant_message = _format_plan_response(travel_plan)
+
+        await session_manager.add_message(
+            db, session.id, role="assistant", content=assistant_message
+        )
+
+        return TravelChatResponse(
+            user_id=request.user_id,
+            session_id=session.id,
+            assistant_message=assistant_message,
+            plan_request_id=plan_request.id,
+            plan=TravelPlanResponse.model_validate(travel_plan),
+            status="completed",
+        )
+    except Exception as e:
+        logger.error(f"Form-based plan generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
+
+
+async def _extract_wishes_only(
+    free_text: str,
+    user_profile_summary: str = "",
+    preference_signals: list[dict] | None = None,
+) -> TravelWishes:
+    """free_textからTravelWishesのみを抽出（constraintsは無視）"""
+    try:
+        result = await translator_agent.translate(
+            TranslateRequestInput(
+                raw_request=free_text,
+                user_profile_summary=user_profile_summary,
+                preference_signals=preference_signals or [],
+            )
+        )
+        return result.wishes
+    except Exception as e:
+        logger.warning(f"Wishes extraction from free_text failed: {e}")
+        return TravelWishes()
 
 
 @router.get("/plan/{plan_id}", response_model=TravelPlanResponse)

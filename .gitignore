@@ -53,3 +53,6 @@ dist/
 
 # Config (optional local override)
 config/ollama_workers.json
+
+# OSRM map data (large files)
+osrm-data/
