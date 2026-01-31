@@ -21,6 +21,19 @@ const emit = defineEmits<{
 
 const inputMessage = ref('')
 const messagesContainer = ref<HTMLElement | null>(null)
+const isComposing = ref(false)
+
+// IME変換状態を追跡
+const handleCompositionStart = () => {
+  isComposing.value = true
+}
+
+const handleCompositionEnd = () => {
+  // 変換確定直後のEnterキーを誤検知しないよう遅延
+  setTimeout(() => {
+    isComposing.value = false
+  }, 200)
+}
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -30,22 +43,33 @@ const scrollToBottom = async () => {
 }
 
 const handleSend = () => {
+  // IME変換中は送信しない
+  if (isComposing.value) return
   if (!inputMessage.value.trim() || props.isLoading) return
   emit('sendMessage', inputMessage.value.trim())
   inputMessage.value = ''
 }
 
 const handleKeydown = (event: KeyboardEvent) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
+  if (event.key !== 'Enter') return
+
+  // Shift+Enter: 改行（デフォルト動作を許可）
+  if (event.shiftKey) return
+
+  // それ以外のEnter: すべてブロック（IME変換中含む）
+  event.preventDefault()
+
+  // Ctrl+Enter または Cmd+Enter かつ IME変換中でない場合のみ送信
+  if ((event.ctrlKey || event.metaKey) && !isComposing.value && !event.isComposing && event.keyCode !== 229) {
     handleSend()
   }
 }
 
 const placeholderText = () => {
+  const hint = ' (⌘/Ctrl+Enterで送信)'
   return props.currentMode === 'travel'
-    ? '旅行の希望を入力... (例: 来月、京都に2泊3日で一人旅したい)'
-    : 'メッセージを入力...'
+    ? '旅行の希望を入力...' + hint
+    : 'メッセージを入力...' + hint
 }
 
 const loadingText = () => {
@@ -85,11 +109,13 @@ watch(() => props.messages.length, scrollToBottom)
       <textarea
         v-model="inputMessage"
         @keydown="handleKeydown"
+        @compositionstart="handleCompositionStart"
+        @compositionend="handleCompositionEnd"
         :placeholder="placeholderText()"
         :disabled="isLoading"
         rows="2"
       />
-      <button @click="handleSend" :disabled="isLoading || !inputMessage.trim()">
+      <button type="button" @click="handleSend" :disabled="isLoading || !inputMessage.trim()">
         送信
       </button>
     </div>

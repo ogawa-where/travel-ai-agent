@@ -26,6 +26,35 @@ const isLoading = ref(false)
 const inputMessage = ref('')
 const messagesContainer = ref<HTMLElement | null>(null)
 const isInitialized = ref(false)
+const isComposing = ref(false)
+
+// IME変換状態を追跡
+const handleCompositionStart = () => {
+  isComposing.value = true
+}
+
+const handleCompositionEnd = () => {
+  // 変換確定直後のEnterキーを誤検知しないよう遅延
+  setTimeout(() => {
+    isComposing.value = false
+  }, 200)
+}
+
+// キーボードイベント処理
+const handleKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Enter') return
+
+  // Shift+Enter: 改行（デフォルト動作を許可）
+  if (event.shiftKey) return
+
+  // それ以外のEnter: すべてブロック
+  event.preventDefault()
+
+  // Ctrl+Enter または Cmd+Enter かつ IME変換中でない場合のみ送信
+  if ((event.ctrlKey || event.metaKey) && !isComposing.value && !event.isComposing && event.keyCode !== 229) {
+    sendMessage()
+  }
+}
 
 const formatMessage = (content: string): string => {
   return content
@@ -154,12 +183,15 @@ onMounted(() => {
       <div class="input-container">
         <textarea
           v-model="inputMessage"
-          @keydown.enter.exact.prevent="sendMessage"
-          placeholder="旅行の好みを教えてください..."
+          @keydown="handleKeydown"
+          @compositionstart="handleCompositionStart"
+          @compositionend="handleCompositionEnd"
+          placeholder="旅行の好みを教えてください... (⌘/Ctrl+Enterで送信)"
           :disabled="isLoading || !user"
           rows="1"
         ></textarea>
         <button
+          type="button"
           @click="sendMessage"
           :disabled="!inputMessage.trim() || isLoading || !user"
           class="send-btn"

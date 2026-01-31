@@ -38,6 +38,10 @@ const handleSubmit = async () => {
 }
 
 const handleKeydown = (e: KeyboardEvent) => {
+  // IME変換中はEnterで送信しない
+  if (e.isComposing) return
+
+  // Enter または Ctrl+Enter でログイン
   if (e.key === 'Enter' && !isLoading.value) {
     handleSubmit()
   }
