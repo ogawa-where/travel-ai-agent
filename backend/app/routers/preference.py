@@ -147,10 +147,16 @@ async def chat(
             question_context = msg["content"]
             break
 
+    # Get existing signals for deduplication
+    existing_signals = [
+        {"tag": s.tag, "category": s.category} for s in user.preference_signals
+    ]
+
     # Extract signals from user message
     extraction_result = await preference_learner.extract_signals(
         user_message=user_message,
         context=question_context,
+        existing_signals=existing_signals,
     )
 
     # Save new signals to database

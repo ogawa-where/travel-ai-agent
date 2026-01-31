@@ -7,19 +7,26 @@ from pydantic import BaseModel, ConfigDict, Field
 class PreferenceCategory(str, Enum):
     """嗜好カテゴリ（長期記憶用）
 
-    - LIKES: 好きなもの（食事、アクティビティなど）
+    嗜好学習モードで抽出するカテゴリ:
+    - LIKES: 好きなもの・興味があるもの（食事、場所、興味分野など）
+      例: 和食が好き、歴史に興味がある、静かな場所が好き、自然が好き
     - DISLIKES: 嫌いなもの・避けたいもの
-    - EXPERIENCE_AXIS: 体験軸の嗜好（文化/自然/冒険/リラックスなど）
-    - TENDENCY: 旅行傾向（計画派か即興派か、ゆっくり派かアクティブ派かなど）
+      例: 混雑が苦手、辛いものNG、長時間歩くのは苦手
+    - TENDENCY: 旅行傾向・スタイル
+      例: 計画派、即興派、ゆっくり派、アクティブ派、朝型、夜型
+
+    旅行企画モードで使用するカテゴリ（嗜好学習では抽出しない）:
+    - EXPERIENCE_AXIS: 体験軸（旅行企画モードで好みを元に体験を提案する際に使用）
 
     Note: 短期的な制約（予算3万円、2泊3日など）は TravelConstraints で扱う
-    Note: 「体験重視」はプラットフォームの前提なので抽出しない
+    Note: 「体験」は嗜好学習では抽出しない。好みを元に旅行企画モードで提案する
     """
 
     LIKES = "likes"
     DISLIKES = "dislikes"
-    EXPERIENCE_AXIS = "experience_axis"
     TENDENCY = "tendency"
+    # 旅行企画モードで使用（嗜好学習では抽出しない）
+    EXPERIENCE_AXIS = "experience_axis"
 
 
 class PreferenceSignalBase(BaseModel):

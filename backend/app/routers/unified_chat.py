@@ -175,10 +175,16 @@ async def _extract_preferences(
             question_context = msg["content"]
             break
 
+    # 既存シグナルを取得（重複回避用）
+    existing_signals = [
+        {"tag": s.tag, "category": s.category} for s in (user.preference_signals or [])
+    ]
+
     # 嗜好を抽出
     extraction_result = await preference_learner.extract_signals(
         user_message=user_message,
         context=question_context,
+        existing_signals=existing_signals,
     )
 
     learned_preferences = []
