@@ -128,7 +128,33 @@ OSRMを使用するには、日本の地図データをダウンロードし前�
 - ダウンロード: ネットワーク速度に依存
 - 前処理: 30分〜1時間程度（マシンスペックに依存）
 
-### 4. 起動
+### 4. mafu（オーケストレーターサーバー）のIPアドレス設定
+
+オーケストレーターをデプロイするサーバーのIPアドレスを設定する必要があります。
+セットアップスクリプトを使用して自動的に更新できます。
+
+```bash
+./scripts/update-mafu-ip.sh
+```
+
+このスクリプトは以下の処理を行います：
+
+1. 現在のサーバーのIPアドレスを自動検出
+2. `backend/config/ollama_workers.json` の以下の箇所を更新：
+   - `workers` 配列内のmafuエントリの `host`
+   - `search_routing.transportation.host`
+
+**手動でIPアドレスを指定する場合：**
+
+```bash
+./scripts/update-mafu-ip.sh 192.168.1.100
+```
+
+**注意：**
+- バックアップファイル（`ollama_workers.json.bak`）が自動作成されます
+- jqがインストールされている場合は、より正確な更新が行われます
+
+### 5. 起動
 
 ```bash
 docker compose up --build
@@ -193,7 +219,8 @@ docker compose down
 │   ├── Dockerfile
 │   └── package.json
 ├── scripts/
-│   └── setup-osrm.sh       # OSRM日本地図セットアップ
+│   ├── setup-osrm.sh       # OSRM日本地図セットアップ
+│   └── update-mafu-ip.sh   # mafuのIPアドレス更新
 ├── config/
 ├── docs/
 ├── osrm-data/              # OSRMデータ（gitignore）

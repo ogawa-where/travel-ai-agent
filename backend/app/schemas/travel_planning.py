@@ -492,6 +492,74 @@ class CrossCategoryEvaluation(BaseModel):
 # =============================================================================
 
 
+# =============================================================================
+# 情報収集フェーズ用
+# =============================================================================
+
+
+class BasicTravelInfo(BaseModel):
+    """旅行の基本情報（フォームから入力）"""
+
+    user_id: str
+    area: str = Field(..., description="観光エリア（例: '京都', '箱根'）")
+    start_date: str = Field(..., description="出発日 (YYYY-MM-DD)")
+    end_date: str = Field(..., description="帰着日 (YYYY-MM-DD)")
+    num_people: int = Field(default=1, ge=1, description="人数")
+
+
+class CollectedTravelInfo(BaseModel):
+    """収集した旅行情報（対話から収集）"""
+
+    # 基本情報（フォームから）
+    area: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    num_people: int = 1
+
+    # 対話で収集する情報
+    budget: int | None = None  # 総予算
+    budget_per_person: int | None = None  # 一人あたり予算
+    transportation: str | None = None  # 移動手段
+    accommodation_type: str | None = None  # 宿泊タイプ
+    food_preferences: list[str] = Field(default_factory=list)  # 食の好み
+    activity_preferences: list[str] = Field(default_factory=list)  # アクティビティの好み
+    must_visit: list[str] = Field(default_factory=list)  # 必ず行きたい場所
+    avoid: list[str] = Field(default_factory=list)  # 避けたいもの
+    pace: str | None = None  # ゆっくり / 普通 / アクティブ
+    special_requests: str | None = None  # 特別なリクエスト
+
+
+class GatheringChatRequest(BaseModel):
+    """情報収集チャットリクエスト"""
+
+    user_id: str
+    message: str
+    session_id: str
+
+
+class TravelGatheringResponse(BaseModel):
+    """情報収集レスポンス"""
+
+    session_id: str
+    assistant_message: str
+    collected_info: CollectedTravelInfo
+    is_ready: bool = False  # 情報収集が十分かどうか
+    missing_info: list[str] = Field(default_factory=list)  # まだ収集していない情報
+
+
+class PlanGenerationRequest(BaseModel):
+    """プラン生成リクエスト"""
+
+    user_id: str
+    session_id: str
+    collected_info: CollectedTravelInfo
+
+
+# =============================================================================
+# 構造化フォーム入力
+# =============================================================================
+
+
 class TravelPlanFormRequest(BaseModel):
     """構造化フォームからの旅行企画リクエスト"""
 

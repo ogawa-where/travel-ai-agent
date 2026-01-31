@@ -70,14 +70,21 @@ HEALTH_CHECK_INTERVAL_SECONDS = 30
 # - LIGHT モデル使用 → LIGHT ワーカー
 # - EMBED モデル使用 → EMBED ワーカー
 AGENT_ROLE_MAPPING = {
+    # Heavy (32B model) - nubia only
     "planner": WorkerRole.HEAVY,
     "explainer": WorkerRole.HEAVY,
-    "profile_updater": WorkerRole.HEAVY,  # 複雑な統合タスクはHEAVYモデル使用
+    "profile_updater": WorkerRole.HEAVY,
+    "search_evaluator": WorkerRole.HEAVY,
+    # Light (8B/12B model) - qilin
     "translator": WorkerRole.LIGHT,
     "summarizer": WorkerRole.LIGHT,
     "preference_learner": WorkerRole.LIGHT,
-    "experience_extractor": WorkerRole.LIGHT,  # JSON生成はLIGHTモデル使用
+    "gathering_agent": WorkerRole.LIGHT,
+    "experience_extractor": WorkerRole.LIGHT,
+    # Embed - ranco
     "reranker": WorkerRole.EMBED,
+    # Note: search_reasoner, search_poi_extractor, search_verifier use
+    # search_routing config for per-category worker/model assignment
 }
 
 
@@ -508,6 +515,126 @@ class LLMGateway:
             attempts=settings.llm_max_retries,
             details={"last_error": str(last_error), "tried_workers": list(tried_workers)},
         )
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        tier: ModelTier = ModelTier.LIGHT,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        agent_name: str | None = None,
+        worker_host: str | None = None,
+        model_override: str | None = None,
+    ):
+        """
+        ストリーミングでテキスト生成
+
+        Ollama APIのstream: trueを使用し、チャンクごとにyieldする。
+
+        Args:
+            prompt: プロンプト
+            tier: モデルティア
+            system_prompt: システムプロンプト
+            temperature: 温度
+            max_tokens: 最大トークン数
+            agent_name: エージェント名（役割ベースルーティング用）
+            worker_host: 直接指定するワーカーホスト
+            model_override: モデル名を直接指定
+
+        Yields:
+            str: 生成されたテキストのチャンク
+
+        Raises:
+            LLMUnavailableError: ワーカーが利用不可
+            LLMGenerationError: 生成失敗
+        """
+        role = self.get_role_for_agent(agent_name) if agent_name else WorkerRole.ANY
+        worker = self._select_worker(role=role, preferred_host=worker_host)
+
+        if not worker:
+            raise LLMUnavailableError(
+                message=f"No available workers for role: {role.value}",
+                details={"workers": [w.host for w in self.workers], "required_role": role.value}
+            )
+
+        model = model_override or self._get_model_name(tier)
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        try:
+            async with worker.semaphore:
+                start_time = time.time()
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(settings.llm_timeout, connect=10.0)
+                ) as client:
+                    async with client.stream(
+                        "POST",
+                        f"http://{worker.host}/api/chat",
+                        json=payload,
+                    ) as response:
+                        response.raise_for_status()
+                        total_content = ""
+
+                        async for line in response.aiter_lines():
+                            if not line.strip():
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                                content = chunk.get("message", {}).get("content", "")
+                                if content:
+                                    total_content += content
+                                    yield content
+
+                                # 完了チェック
+                                if chunk.get("done", False):
+                                    break
+                            except json.JSONDecodeError:
+                                continue
+
+                        elapsed = time.time() - start_time
+                        worker.mark_healthy()
+
+                        logger.info(
+                            f"LLM generate_stream: model={model}, worker={worker.host}, "
+                            f"role={role.value}, agent={agent_name or 'unknown'}, "
+                            f"latency={elapsed:.2f}s, chars={len(total_content)}"
+                        )
+
+        except httpx.TimeoutException as e:
+            worker.mark_unhealthy()
+            raise LLMGenerationError(
+                message=f"LLM streaming timeout on {worker.host}: {e}",
+                attempts=1,
+                details={"worker": worker.host, "error": str(e)},
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                worker.mark_unhealthy()
+            raise LLMGenerationError(
+                message=f"LLM streaming HTTP error on {worker.host}: {e.response.status_code}",
+                attempts=1,
+                details={"worker": worker.host, "status_code": e.response.status_code},
+            )
+        except Exception as e:
+            worker.mark_unhealthy()
+            raise LLMGenerationError(
+                message=f"LLM streaming error on {worker.host}: {e}",
+                attempts=1,
+                details={"worker": worker.host, "error": str(e)},
+            )
 
     async def generate_json(
         self,

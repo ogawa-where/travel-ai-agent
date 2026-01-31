@@ -2,7 +2,7 @@
 import { ref, nextTick, onMounted, watch } from 'vue'
 import { api } from '../lib/api'
 import { getErrorMessage } from '../lib/errors'
-import type { User, PreferenceSignal, ChatResponse } from '../lib/api'
+import type { User, PreferenceSignal } from '../lib/api'
 
 interface Props {
   user: User | null
@@ -93,6 +93,9 @@ const initializeChat = async () => {
   }
 }
 
+const isStreaming = ref(false)
+const streamingMessageIndex = ref(-1)
+
 const sendMessage = async () => {
   if (!props.user || isLoading.value || !inputMessage.value.trim()) return
 
@@ -107,30 +110,62 @@ const sendMessage = async () => {
 
   try {
     isLoading.value = true
-    const response: ChatResponse = await api.sendMessage(
+    isStreaming.value = true
+
+    // ストリーミング用の空メッセージを追加
+    messages.value.push({
+      role: 'assistant',
+      content: '',
+    })
+    streamingMessageIndex.value = messages.value.length - 1
+    await scrollToBottom()
+
+    await api.sendMessageStream(
       props.user.id,
       userMessage,
-      sessionId.value || undefined
+      sessionId.value || undefined,
+      // onChunk: テキストチャンクを受信
+      (content: string) => {
+        if (streamingMessageIndex.value >= 0) {
+          messages.value[streamingMessageIndex.value].content += content
+          scrollToBottom()
+        }
+      },
+      // onSignals: 嗜好シグナルを受信
+      (signals) => {
+        if (signals && signals.length > 0) {
+          emit('preferences-updated', signals)
+        }
+      },
+      // onDone: 完了
+      (newSessionId: string) => {
+        sessionId.value = newSessionId
+        isStreaming.value = false
+        streamingMessageIndex.value = -1
+      },
+      // onError: エラー
+      (error: string) => {
+        console.error('Streaming error:', error)
+        if (streamingMessageIndex.value >= 0) {
+          messages.value[streamingMessageIndex.value].content = `エラー: ${error}`
+        }
+        isStreaming.value = false
+        streamingMessageIndex.value = -1
+      }
     )
-
-    sessionId.value = response.session_id
-    messages.value.push({
-      role: 'assistant',
-      content: response.assistant_message,
-    })
-    await scrollToBottom()
-
-    // 嗜好シグナルが更新されたらイベントを発火
-    if (response.updated_signals && response.updated_signals.length > 0) {
-      emit('preferences-updated', response.updated_signals)
-    }
   } catch (error) {
     console.error('Failed to send message:', error)
-    messages.value.push({
-      role: 'assistant',
-      content: `エラー: ${getErrorMessage(error)}`,
-    })
+    if (streamingMessageIndex.value >= 0) {
+      messages.value[streamingMessageIndex.value].content = `エラー: ${getErrorMessage(error)}`
+    } else {
+      messages.value.push({
+        role: 'assistant',
+        content: `エラー: ${getErrorMessage(error)}`,
+      })
+    }
     await scrollToBottom()
+    isStreaming.value = false
+    streamingMessageIndex.value = -1
   } finally {
     isLoading.value = false
   }
@@ -169,7 +204,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="isLoading" class="message assistant">
+        <div v-if="isLoading && !isStreaming" class="message assistant">
           <div class="message-content">
             <div class="typing-indicator">
               <span></span>
