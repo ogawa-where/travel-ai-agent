@@ -88,14 +88,29 @@ OSRM_BASE_URL=http://osrm:5000
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
-### 3. OSRM データの準備
+### 3. OSRM データの準備（日本地図のダウンロード）
 
-OSRMを使用する場合、事前にデータを準備する必要があります：
+OSRMを使用するには、日本の地図データをダウンロードし前処理する必要があります。
+セットアップスクリプトを使用して自動的に準備できます。
 
 ```bash
-mkdir -p osrm-data
-# japan-latest.osrm ファイルを osrm-data/ に配置
+./scripts/setup-osrm.sh
 ```
+
+このスクリプトは以下の処理を行います：
+
+1. `osrm-data/` ディレクトリを作成
+2. Geofabrikから日本の地図データ（PBFファイル、約1.5GB）をダウンロード
+3. OSRM用に前処理（extract → partition → customize）
+
+**前提条件：**
+- Docker がインストール済み
+- 十分なディスク容量（PBF: ~1.5GB、処理後: ~3GB）
+- wget コマンドが利用可能
+
+**処理時間の目安：**
+- ダウンロード: ネットワーク速度に依存
+- 前処理: 30分〜1時間程度（マシンスペックに依存）
 
 ### 4. 起動
 
@@ -161,9 +176,11 @@ docker compose down
 │   │   └── main.ts
 │   ├── Dockerfile
 │   └── package.json
+├── scripts/
+│   └── setup-osrm.sh       # OSRM日本地図セットアップ
 ├── config/
 ├── docs/
-├── osrm-data/
+├── osrm-data/              # OSRMデータ（gitignore）
 ├── docker-compose.yml
 ├── .env.example
 └── CLAUDE.md
