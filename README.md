@@ -40,6 +40,11 @@
 │  │ Frontend │  │  Orchestrator │  │PostgreSQL│  │   OSRM     │ │
 │  │  :3000   │  │    :8000      │  │  :5432   │  │   :5001    │ │
 │  └──────────┘  └───────────────┘  └──────────┘  └────────────┘ │
+│                                                  ┌────────────┐ │
+│                                                  │  Ollama    │ │
+│                                                  │  :11434    │ │
+│                                                  │ (検索時)   │ │
+│                                                  └────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
@@ -47,9 +52,20 @@
 ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
 │    nubia      │ │    qilin      │ │    ranco      │
 │  Heavy LLM    │ │  Light LLM    │ │  Embedding    │
-│  qwen:32b     │ │  llama:8b     │ │ nomic-embed   │
+│  qwen:32b     │ │  gemma3:12b   │ │ nomic-embed   │
 └───────────────┘ └───────────────┘ └───────────────┘
 ```
+
+### 検索フェーズのモデル割り当て
+
+検索フェーズでは4台すべてで32bモデル（`qwen2.5:32b-instruct`）を使用し、高品質な推論を実現します。
+
+| カテゴリ | サーバー | モデル |
+|---------|---------|--------|
+| Activity（体験・観光） | nubia | qwen2.5:32b-instruct |
+| Food（食） | qilin | qwen2.5:32b-instruct |
+| Hotel（宿） | ranco | qwen2.5:32b-instruct |
+| Transportation（交通） | mafu | qwen2.5:32b-instruct |
 
 ## セットアップ
 
@@ -71,8 +87,8 @@ cp .env.example .env
 ```bash
 # Ollama Configuration
 OLLAMA_WORKERS=nubia:11434,qilin:11434,ranco:11434,mafu:11434
-OLLAMA_MODEL_HEAVY=qwen2.5-bakeneko-32b-instruct-v2
-OLLAMA_MODEL_LIGHT=okamototk/llama-swallow:8b
+OLLAMA_MODEL_HEAVY=qwen2.5:32b-instruct
+OLLAMA_MODEL_LIGHT=gemma3:12b
 OLLAMA_MODEL_EMBED=nomic-embed-text
 
 # Database
@@ -188,16 +204,26 @@ docker compose down
 
 ## エージェント一覧
 
-| エージェント | 役割 | モデル |
-|-------------|------|--------|
-| Planner | 制約+スコアリングで旅程生成 | Heavy (32B) |
-| Explainer | 嗜好と体験軸に基づく根拠説明生成 | Heavy (32B) |
-| Profile Updater | 長期記憶の更新 | Heavy (32B) |
-| Translator | 要求文→制約/嗜好JSON変換 | Light (8B) |
-| Summarizer | 短期要約更新 | Light (8B) |
-| Preference Learner | 会話から嗜好を抽出 | Light (8B) |
-| Reranker | 体験ベース埋め込みでPOIランク付け | Embedding |
-| Search Agents | カテゴリ別検索（4並列） | 各サーバー |
+### 通常時（嗜好学習・旅程生成）
+
+| エージェント | 役割 | サーバー | モデル |
+|-------------|------|---------|--------|
+| Planner | 制約+スコアリングで旅程生成 | nubia | qwen2.5:32b |
+| Explainer | 嗜好と体験軸に基づく根拠説明生成 | nubia | qwen2.5:32b |
+| Profile Updater | 長期記憶の更新 | nubia | qwen2.5:32b |
+| Translator | 要求文→制約/嗜好JSON変換 | qilin | gemma3:12b |
+| Summarizer | 短期要約更新 | qilin | gemma3:12b |
+| Preference Learner | 会話から嗜好を抽出 | qilin | gemma3:12b |
+| Reranker | 体験ベース埋め込みでPOIランク付け | ranco | nomic-embed |
+
+### 検索フェーズ（4サーバー並列）
+
+| カテゴリ | サーバー | モデル |
+|---------|---------|--------|
+| Activity（体験・観光） | nubia | qwen2.5:32b |
+| Food（食） | qilin | qwen2.5:32b |
+| Hotel（宿） | ranco | qwen2.5:32b |
+| Transportation（交通） | mafu | qwen2.5:32b |
 
 ## ライセンス
 
