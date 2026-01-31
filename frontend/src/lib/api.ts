@@ -318,6 +318,92 @@ export const api = {
     return response.json()
   },
 
+  /**
+   * ストリーミングでメッセージを送信
+   * @param userId ユーザーID
+   * @param message メッセージ
+   * @param sessionId セッションID
+   * @param onChunk チャンク受信時のコールバック
+   * @param onSignals シグナル受信時のコールバック
+   * @param onDone 完了時のコールバック
+   * @param onError エラー時のコールバック
+   */
+  async sendMessageStream(
+    userId: string,
+    message: string,
+    sessionId: string | undefined,
+    onChunk: (content: string) => void,
+    onSignals?: (signals: PreferenceSignal[]) => void,
+    onDone?: (sessionId: string) => void,
+    onError?: (error: string) => void,
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/preference/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        message: message,
+        session_id: sessionId,
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      onError?.(error)
+      throw new Error(error)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Response body is not readable')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6)
+            if (!jsonStr.trim()) continue
+
+            try {
+              const data = JSON.parse(jsonStr)
+              switch (data.type) {
+                case 'chunk':
+                  onChunk(data.content)
+                  break
+                case 'signals':
+                  onSignals?.(data.signals)
+                  break
+                case 'done':
+                  onDone?.(data.session_id)
+                  break
+                case 'error':
+                  onError?.(data.message)
+                  break
+              }
+            } catch (e) {
+              console.warn('Failed to parse SSE data:', jsonStr)
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+
   async getUserSignals(userId: string): Promise<PreferenceSignal[]> {
     const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/preference/users/${userId}/signals`)
     return response.json()

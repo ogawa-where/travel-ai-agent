@@ -1,12 +1,15 @@
+import json
 import logging
-from typing import Annotated
+from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.preference_learner import preference_learner
+from app.services.llm_gateway import llm_gateway, ModelTier
 from app.agents.summarizer import summarizer_agent
 from app.database import get_db
 from app.domain.models import PreferenceSignal, User, UserProfile
@@ -244,6 +247,184 @@ async def chat(
         updated_signals=[
             PreferenceSignalResponse.model_validate(s) for s in new_signals
         ],
+    )
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    嗜好学習チャット（ストリーミング）
+
+    Server-Sent Events形式でレスポンスを返す。
+    各チャンクは以下の形式:
+    - data: {"type": "chunk", "content": "テキスト"}
+    - data: {"type": "signals", "signals": [...]}
+    - data: {"type": "done", "session_id": "..."}
+    """
+    user_id = request.user_id
+    user_message = request.message
+    session_id = request.session_id
+
+    # Check user exists and load profile
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.profile), selectinload(User.preference_signals))
+        .where(User.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get session
+    if session_id:
+        session = await session_manager.get_session(db, session_id)
+    else:
+        session = await session_manager.get_active_session(
+            db, user_id, mode="preference_learning"
+        )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Add user message to session
+    await session_manager.add_message(db, session.id, role="user", content=user_message)
+
+    # Get context for LLM
+    context_data = await session_manager.get_context_for_llm(db, session.id)
+    conversation_history = context_data["last_3_turns_raw"]
+
+    # Get last assistant message as question context
+    question_context = ""
+    for msg in reversed(conversation_history):
+        if msg["role"] == "assistant":
+            question_context = msg["content"]
+            break
+
+    # Get existing signals for deduplication
+    existing_signals = [
+        {"tag": s.tag, "category": s.category} for s in user.preference_signals
+    ]
+
+    async def generate_stream() -> AsyncGenerator[str, None]:
+        """SSE形式でストリームを生成"""
+        full_response = ""
+
+        try:
+            # まず嗜好シグナルを抽出（非ストリーミング）
+            extraction_result = await preference_learner.extract_signals(
+                user_message=user_message,
+                context=question_context,
+                existing_signals=existing_signals,
+            )
+
+            # シグナルを保存
+            new_signals = []
+            for signal_data in extraction_result.get("signals", []):
+                signal = PreferenceSignal(
+                    user_id=user_id,
+                    category=signal_data["category"],
+                    tag=signal_data["tag"],
+                    weight=signal_data["weight"],
+                    evidence=signal_data["evidence"],
+                )
+                db.add(signal)
+                new_signals.append(signal)
+
+            # シグナルがあれば送信
+            if new_signals:
+                await db.flush()
+                for signal in new_signals:
+                    await db.refresh(signal)
+                signals_data = [
+                    {
+                        "id": str(signal.id),
+                        "category": signal.category,
+                        "tag": signal.tag,
+                        "weight": signal.weight,
+                    }
+                    for signal in new_signals
+                ]
+                yield f"data: {json.dumps({'type': 'signals', 'signals': signals_data}, ensure_ascii=False)}\n\n"
+
+            # プロフィール要約を更新
+            if new_signals:
+                new_summary = await preference_learner.update_profile_summary(
+                    current_summary=user.profile.summary if user.profile else "",
+                    new_signals=extraction_result.get("signals", []),
+                )
+                if user.profile:
+                    user.profile.summary = new_summary
+
+            # レスポンスをストリーミングで生成
+            known_signals = [
+                {"category": s.category, "tag": s.tag, "weight": s.weight}
+                for s in (user.preference_signals or []) + new_signals
+            ]
+
+            # システムプロンプトを構築
+            system_prompt = f"""あなたは旅行嗜好を学習するAIアシスタントです。
+ユーザーの回答から興味・好みを理解し、さらに深掘りする質問をしてください。
+
+ユーザープロフィール:
+{user.profile.summary if user.profile else "まだ情報がありません"}
+
+既知の嗜好:
+{json.dumps(known_signals, ensure_ascii=False) if known_signals else "まだ情報がありません"}
+
+会話履歴:
+{json.dumps(conversation_history, ensure_ascii=False)}
+
+ユーザーの回答に対して、自然に会話を続けてください。"""
+
+            # ストリーミングでレスポンス生成
+            async for chunk in llm_gateway.generate_stream(
+                prompt=user_message,
+                tier=ModelTier.LIGHT,
+                system_prompt=system_prompt,
+                agent_name="preference_learner",
+            ):
+                full_response += chunk
+                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
+
+            # アシスタントメッセージをセッションに保存
+            await session_manager.add_message(
+                db, session.id, role="assistant", content=full_response
+            )
+
+            # 要約が必要か確認
+            messages_to_summarize = await session_manager.get_turns_to_summarize(db, session.id)
+            if messages_to_summarize:
+                current_summary = context_data["session_summary"]
+                new_summary = await summarizer_agent.summarize_messages(
+                    existing_summary=current_summary,
+                    messages=messages_to_summarize,
+                )
+                max_turn = max(m.turn_index for m in messages_to_summarize)
+                await session_manager.update_session_summary(
+                    db, session.id, new_summary, max_turn
+                )
+                await session_manager.mark_messages_as_summarized(db, messages_to_summarize)
+
+            await db.commit()
+
+            # 完了イベントを送信
+            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
