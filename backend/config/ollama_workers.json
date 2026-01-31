@@ -43,15 +43,15 @@
     },
     "food": {
       "host": "172.28.208.217:11434",
-      "model": "okamototk/llama-swallow:8b"
+      "model": "qwen2.5:32b-instruct"
     },
     "hotel": {
       "host": "172.28.208.218:11434",
-      "model": "okamototk/llama-swallow:8b"
+      "model": "qwen2.5:32b-instruct"
     },
     "transportation": {
       "host": "172.28.208.213:11434",
-      "model": "okamototk/llama-swallow:8b"
+      "model": "qwen2.5:32b-instruct"
     }
   }
 }
