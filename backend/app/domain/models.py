@@ -150,6 +150,10 @@ class Session(Base):
         Boolean,
         default=True,
     )
+    extra_data: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+    )  # 追加情報（collected_info など）
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=_utcnow,

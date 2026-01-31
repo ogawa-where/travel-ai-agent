@@ -236,6 +236,40 @@ interface TravelPlanFormData {
   free_text: string
 }
 
+// 新しい旅行企画フロー用
+interface BasicTravelInfo {
+  user_id: string
+  area: string             // 観光エリア（例: 京都、箱根）
+  start_date: string       // "YYYY-MM-DD"
+  end_date: string         // "YYYY-MM-DD"
+  num_people: number
+}
+
+interface CollectedTravelInfo {
+  area: string
+  start_date: string
+  end_date: string
+  num_people: number
+  budget?: number
+  budget_per_person?: number
+  transportation?: string
+  accommodation_type?: string
+  food_preferences?: string[]
+  activity_preferences?: string[]
+  must_visit?: string[]
+  avoid?: string[]
+  pace?: string            // ゆっくり / 普通 / アクティブ
+  special_requests?: string
+}
+
+interface TravelGatheringResponse {
+  session_id: string
+  assistant_message: string
+  collected_info: CollectedTravelInfo
+  is_ready: boolean        // 情報収集が十分かどうか
+  missing_info: string[]   // まだ収集していない情報のリスト
+}
+
 // ジオ情報付き旅程
 interface GeoEnrichedPOI {
   name: string
@@ -591,6 +625,136 @@ export const api = {
       hotel: hotel.status === 'fulfilled' ? hotel.value : null,
     }
   },
+
+  // 新しい旅行企画フロー
+  // 基本情報を送信してセッション開始
+  async startTravelGathering(data: BasicTravelInfo): Promise<TravelGatheringResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/gathering/start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+    return response.json()
+  },
+
+  // 情報収集の対話
+  async sendGatheringMessage(
+    userId: string,
+    message: string,
+    sessionId: string,
+  ): Promise<TravelGatheringResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/gathering/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        message: message,
+        session_id: sessionId,
+      }),
+    })
+    return response.json()
+  },
+
+  // 情報収集の対話（ストリーミング）
+  async sendGatheringMessageStream(
+    userId: string,
+    message: string,
+    sessionId: string,
+    onChunk: (content: string) => void,
+    onInfo?: (info: CollectedTravelInfo) => void,
+    onDone?: (response: TravelGatheringResponse) => void,
+    onError?: (error: string) => void,
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/travel/gathering/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        message: message,
+        session_id: sessionId,
+      }),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      onError?.(error)
+      throw new Error(error)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Response body is not readable')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6)
+            if (!jsonStr.trim()) continue
+
+            try {
+              const data = JSON.parse(jsonStr)
+              switch (data.type) {
+                case 'chunk':
+                  onChunk(data.content)
+                  break
+                case 'info':
+                  onInfo?.(data.collected_info)
+                  break
+                case 'done':
+                  onDone?.(data)
+                  break
+                case 'error':
+                  onError?.(data.message)
+                  break
+              }
+            } catch (e) {
+              console.warn('Failed to parse SSE data:', jsonStr)
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+
+  // 収集した情報でプラン生成開始
+  async startPlanGeneration(
+    userId: string,
+    sessionId: string,
+    collectedInfo: CollectedTravelInfo,
+  ): Promise<TravelChatResponse> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/plan/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        session_id: sessionId,
+        collected_info: collectedInfo,
+      }),
+    })
+    return response.json()
+  },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, TravelGatheringResponse }

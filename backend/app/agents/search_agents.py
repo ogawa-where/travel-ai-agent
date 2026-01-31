@@ -1099,7 +1099,7 @@ async def search_with_reasoning(
         cat_key = category.value
         routing = search_routing.get(cat_key, default_routing.get(cat_key, {}))
         worker_host = routing.get("host", "localhost:11434")
-        model = routing.get("model", "okamototk/llama-swallow:8b")
+        model = routing.get("model", "qwen2.5:32b-instruct")
         hints = hints_per_category.get(cat_key, [])
 
         tasks.append(

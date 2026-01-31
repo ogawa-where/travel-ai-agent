@@ -1,9 +1,11 @@
 """旅行企画モードAPIルーター"""
 
+import json
 import logging
-from typing import Annotated
+from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,8 +14,12 @@ from app.database import get_db
 from app.domain.models import PreferenceSignal, TravelPlan, TravelPlanRequest, User
 from app.orchestrator.travel_planning import travel_orchestrator
 from app.schemas.travel_planning import (
+    BasicTravelInfo,
     CategorySearchRequest,
     CategorySearchResponse,
+    CollectedTravelInfo,
+    GatheringChatRequest,
+    PlanGenerationRequest,
     POICategory,
     POIFeedbackRequest,
     POIFeedbackResponse,
@@ -22,6 +28,7 @@ from app.schemas.travel_planning import (
     TranslateRequestInput,
     TravelChatRequest,
     TravelChatResponse,
+    TravelGatheringResponse,
     TravelPlanFeedbackRequest,
     TravelPlanFeedbackResponse,
     TravelPlanFormRequest,
@@ -30,6 +37,7 @@ from app.schemas.travel_planning import (
     TravelPlanResponse,
     TravelWishes,
 )
+from app.agents.gathering_agent import gathering_agent
 from app.agents.search_agents import (
     activity_search_agent,
     food_search_agent,
@@ -419,6 +427,392 @@ async def start_travel_chat(
         assistant_message=greeting,
         status="chatting",
     )
+
+
+# =============================================================================
+# 情報収集フェーズ（新フロー）
+# =============================================================================
+
+
+@router.post("/gathering/start", response_model=TravelGatheringResponse)
+async def start_gathering(
+    request: BasicTravelInfo,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TravelGatheringResponse:
+    """
+    情報収集フェーズを開始
+
+    基本情報（観光エリア、日程、人数）を受け取り、
+    詳細情報を収集する対話を開始する。
+    """
+    user_id = request.user_id
+
+    # ユーザーを確認
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # セッションを作成
+    session = await session_manager.create_session(
+        db, user_id, mode="travel_planning"
+    )
+
+    # 基本情報を保存
+    collected_info = CollectedTravelInfo(
+        area=request.area,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        num_people=request.num_people,
+    )
+
+    # セッションに収集情報を保存（extra_dataとして）
+    session.extra_data = {"collected_info": collected_info.model_dump()}
+    await db.flush()
+
+    # 初回の挨拶を生成
+    greeting = gathering_agent.get_initial_greeting(collected_info)
+
+    # メッセージを保存
+    await session_manager.add_message(
+        db, session.id, role="assistant", content=greeting
+    )
+
+    await db.commit()
+
+    return TravelGatheringResponse(
+        session_id=session.id,
+        assistant_message=greeting,
+        collected_info=collected_info,
+        is_ready=False,
+        missing_info=["予算", "食の好み", "やりたいこと", "宿泊の希望", "移動手段", "旅のペース"],
+    )
+
+
+@router.post("/gathering/chat", response_model=TravelGatheringResponse)
+async def gathering_chat(
+    request: GatheringChatRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TravelGatheringResponse:
+    """
+    情報収集チャット
+
+    ユーザーからの回答を処理し、情報を蓄積する。
+    """
+    user_id = request.user_id
+    user_message = request.message
+    session_id = request.session_id
+
+    # ユーザーを確認
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # セッションを取得
+    session = await session_manager.get_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # ユーザーメッセージを保存
+    await session_manager.add_message(db, session.id, role="user", content=user_message)
+
+    # 現在の収集情報を取得
+    extra_data = session.extra_data or {}
+    current_info_dict = extra_data.get("collected_info", {})
+    current_info = CollectedTravelInfo(**current_info_dict)
+
+    # 会話履歴を取得
+    context_data = await session_manager.get_context_for_llm(db, session.id)
+    conversation_history = context_data["last_3_turns_raw"]
+
+    # 情報を抽出・更新
+    response, updated_info, is_ready, missing_info = await gathering_agent.process_message(
+        user_message=user_message,
+        current_info=current_info,
+        conversation_history=conversation_history,
+    )
+
+    # 収集情報を更新
+    session.extra_data = {"collected_info": updated_info.model_dump()}
+    await db.flush()
+
+    # アシスタントメッセージを保存
+    await session_manager.add_message(
+        db, session.id, role="assistant", content=response
+    )
+
+    await db.commit()
+
+    return TravelGatheringResponse(
+        session_id=session.id,
+        assistant_message=response,
+        collected_info=updated_info,
+        is_ready=is_ready,
+        missing_info=missing_info,
+    )
+
+
+@router.post("/gathering/chat/stream")
+async def gathering_chat_stream(
+    request: GatheringChatRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    情報収集チャット（ストリーミング）
+
+    Server-Sent Events形式でレスポンスを返す。
+    """
+    user_id = request.user_id
+    user_message = request.message
+    session_id = request.session_id
+
+    # ユーザーを確認
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # セッションを取得
+    session = await session_manager.get_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # ユーザーメッセージを保存
+    await session_manager.add_message(db, session.id, role="user", content=user_message)
+
+    # 現在の収集情報を取得
+    extra_data = session.extra_data or {}
+    current_info_dict = extra_data.get("collected_info", {})
+    current_info = CollectedTravelInfo(**current_info_dict)
+
+    # 会話履歴を取得
+    context_data = await session_manager.get_context_for_llm(db, session.id)
+    conversation_history = context_data["last_3_turns_raw"]
+
+    async def generate_stream() -> AsyncGenerator[str, None]:
+        """SSE形式でストリームを生成"""
+        full_response = ""
+        final_info = current_info
+        final_is_ready = False
+        final_missing = []
+
+        try:
+            async for chunk, updated_info, is_ready, missing_info in gathering_agent.process_message_stream(
+                user_message=user_message,
+                current_info=current_info,
+                conversation_history=conversation_history,
+            ):
+                if chunk:
+                    full_response += chunk
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
+
+                if updated_info is not None:
+                    final_info = updated_info
+                    final_is_ready = is_ready
+                    final_missing = missing_info
+
+            # 収集情報を更新
+            session.extra_data = {"collected_info": final_info.model_dump()}
+            await db.flush()
+
+            # アシスタントメッセージを保存
+            await session_manager.add_message(
+                db, session.id, role="assistant", content=full_response
+            )
+
+            await db.commit()
+
+            # 収集情報を送信
+            yield f"data: {json.dumps({'type': 'info', 'collected_info': final_info.model_dump()}, ensure_ascii=False)}\n\n"
+
+            # 完了イベントを送信
+            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id), 'is_ready': final_is_ready, 'missing_info': final_missing, 'collected_info': final_info.model_dump()}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            logger.error(f"Gathering stream error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/plan/generate", response_model=TravelChatResponse)
+async def generate_plan(
+    request: PlanGenerationRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TravelChatResponse:
+    """
+    収集した情報からプランを生成
+
+    情報収集フェーズで集めた情報を使って旅行プランを生成する。
+    """
+    user_id = request.user_id
+    session_id = request.session_id
+    collected_info = request.collected_info
+
+    # ユーザーを取得
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.profile), selectinload(User.preference_signals))
+        .where(User.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # セッションを取得
+    session = await session_manager.get_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # 収集情報からTravelConstraintsとTravelWishesを構築
+    from datetime import datetime as dt
+
+    start = dt.strptime(collected_info.start_date, "%Y-%m-%d")
+    end = dt.strptime(collected_info.end_date, "%Y-%m-%d")
+    duration = (end - start).days + 1
+
+    from app.schemas.travel_planning import TravelConstraints
+
+    constraints = TravelConstraints(
+        destination=collected_info.area,
+        start_date=collected_info.start_date,
+        end_date=collected_info.end_date,
+        duration_days=duration,
+        budget_total=collected_info.budget,
+        num_people=collected_info.num_people,
+        transportation=collected_info.transportation or "",
+        other={
+            "accommodation_type": collected_info.accommodation_type,
+            "pace": collected_info.pace,
+        },
+    )
+
+    wishes = TravelWishes(
+        activities=collected_info.activity_preferences,
+        experiences=collected_info.activity_preferences,  # 同じリストを使用
+        food_preferences=collected_info.food_preferences,
+        avoid=collected_info.avoid,
+        accommodation_type=collected_info.accommodation_type or "",
+        other={
+            "must_visit": collected_info.must_visit,
+            "special_requests": collected_info.special_requests,
+        },
+    )
+
+    # raw_requestを構築
+    raw_request = _build_raw_request(collected_info)
+
+    # TravelPlanRequestを作成
+    plan_request = TravelPlanRequest(
+        session_id=session.id,
+        user_id=user_id,
+        raw_request=raw_request,
+        status="pending",
+    )
+    db.add(plan_request)
+    await db.flush()
+
+    # プランニング開始メッセージを保存
+    planning_msg = "プランを作成中です。少々お待ちください..."
+    await session_manager.add_message(
+        db, session.id, role="assistant", content=planning_msg
+    )
+
+    # プロフィール情報を準備
+    profile_summary = user.profile.summary if user.profile else ""
+    preference_signals = [
+        {
+            "category": s.category,
+            "tag": s.tag,
+            "weight": s.weight,
+            "evidence": s.evidence,
+        }
+        for s in (user.preference_signals or [])
+    ]
+
+    try:
+        # Orchestratorでプランを生成
+        travel_plan = await travel_orchestrator.execute(
+            db=db,
+            request=plan_request,
+            user_profile_summary=profile_summary,
+            preference_signals=preference_signals,
+            pre_constraints=constraints,
+            pre_wishes=wishes,
+        )
+
+        assistant_message = _format_plan_response(travel_plan)
+
+        await session_manager.add_message(
+            db, session.id, role="assistant", content=assistant_message
+        )
+
+        await db.commit()
+
+        return TravelChatResponse(
+            user_id=user_id,
+            session_id=session.id,
+            assistant_message=assistant_message,
+            plan_request_id=plan_request.id,
+            plan=TravelPlanResponse.model_validate(travel_plan),
+            status="completed",
+        )
+
+    except Exception as e:
+        logger.error(f"Plan generation failed: {e}")
+        error_message = "申し訳ありません。プランの生成中にエラーが発生しました。もう一度お試しください。"
+        await session_manager.add_message(
+            db, session.id, role="assistant", content=error_message
+        )
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
+
+
+def _build_raw_request(info: CollectedTravelInfo) -> str:
+    """収集情報から検索用テキストを構築"""
+    parts = [f"{info.area}への旅行"]
+    parts.append(f"期間: {info.start_date} 〜 {info.end_date}")
+
+    if info.num_people > 1:
+        parts.append(f"{info.num_people}人")
+
+    if info.budget:
+        parts.append(f"予算: {info.budget:,}円")
+
+    if info.transportation:
+        parts.append(f"移動手段: {info.transportation}")
+
+    if info.accommodation_type:
+        parts.append(f"宿泊: {info.accommodation_type}")
+
+    if info.food_preferences:
+        parts.append(f"食の希望: {', '.join(info.food_preferences)}")
+
+    if info.activity_preferences:
+        parts.append(f"やりたいこと: {', '.join(info.activity_preferences)}")
+
+    if info.must_visit:
+        parts.append(f"必ず行きたい: {', '.join(info.must_visit)}")
+
+    if info.avoid:
+        parts.append(f"避けたい: {', '.join(info.avoid)}")
+
+    if info.pace:
+        parts.append(f"ペース: {info.pace}")
+
+    if info.special_requests:
+        parts.append(info.special_requests)
+
+    return "。".join(parts)
 
 
 def _should_generate_plan(message: str) -> bool:

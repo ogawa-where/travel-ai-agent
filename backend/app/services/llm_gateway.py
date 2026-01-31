@@ -70,14 +70,21 @@ HEALTH_CHECK_INTERVAL_SECONDS = 30
 # - LIGHT モデル使用 → LIGHT ワーカー
 # - EMBED モデル使用 → EMBED ワーカー
 AGENT_ROLE_MAPPING = {
+    # Heavy (32B model) - nubia only
     "planner": WorkerRole.HEAVY,
     "explainer": WorkerRole.HEAVY,
-    "profile_updater": WorkerRole.HEAVY,  # 複雑な統合タスクはHEAVYモデル使用
+    "profile_updater": WorkerRole.HEAVY,
+    "search_evaluator": WorkerRole.HEAVY,
+    # Light (8B/12B model) - qilin
     "translator": WorkerRole.LIGHT,
     "summarizer": WorkerRole.LIGHT,
     "preference_learner": WorkerRole.LIGHT,
-    "experience_extractor": WorkerRole.LIGHT,  # JSON生成はLIGHTモデル使用
+    "gathering_agent": WorkerRole.LIGHT,
+    "experience_extractor": WorkerRole.LIGHT,
+    # Embed - ranco
     "reranker": WorkerRole.EMBED,
+    # Note: search_reasoner, search_poi_extractor, search_verifier use
+    # search_routing config for per-category worker/model assignment
 }
 
 
