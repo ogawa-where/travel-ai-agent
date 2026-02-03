@@ -22,7 +22,7 @@ from app.agents.rerank import rerank_agent
 from app.agents.search_agents import search_all_categories, search_with_reasoning, SearchAllResult
 from app.agents.search_evaluator import search_evaluator_agent
 from app.agents.translator import translator_agent
-from app.domain.models import PlanRun, SessionEvent, TravelPlan, TravelPlanRequest
+from app.domain.models import PlanRun, POICache, SessionEvent, TravelPlan, TravelPlanRequest
 from app.schemas.travel_planning import (
     ExplainerInput,
     PlannerInput,
@@ -36,6 +36,7 @@ from app.schemas.travel_planning import (
 from app.agents.search_agents import SearchStatus
 from app.services.normalizer import normalizer_deduper
 from app.services.observability import artifact_storage
+from app.services.poi_repository import poi_repository
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,14 @@ class TravelPlanningOrchestrator:
                 search_results,
             )
 
+            # ステップ3.5: POI DBに保存（PTSアーキテクチャ）
+            poi_cache_map = await self._step_save_pois_to_db(
+                db,
+                plan_run.id,
+                constraints.destination,
+                normalized_pois,
+            )
+
             # ステップ4: リランク（Rerank Agent）
             ranked_pois = await self._step_rerank(
                 db,
@@ -165,6 +174,15 @@ class TravelPlanningOrchestrator:
                 user_profile_summary,
                 preference_signals,
                 wishes,
+            )
+
+            # ステップ4.5: TravelSearchResultにリンク（PTSアーキテクチャ）
+            await self._step_link_pois_to_request(
+                db,
+                plan_run.id,
+                request.id,
+                ranked_pois,
+                poi_cache_map,
             )
 
             # 成果物: 選定されたPOIを保存
@@ -188,6 +206,14 @@ class TravelPlanningOrchestrator:
                 wishes,
                 ranked_pois,
                 user_profile_summary,
+            )
+
+            # ステップ5.5: 選択されたPOIをマーク（PTSアーキテクチャ）
+            await self._step_mark_selected_pois(
+                db,
+                plan_run.id,
+                request.id,
+                planner_result.itinerary,
             )
 
             # ステップ6: 説明生成（Explainer Agent）
@@ -347,8 +373,12 @@ class TravelPlanningOrchestrator:
             latency_ms=int((time.time() - phase2_start) * 1000),
         )
 
-        # 不足カテゴリの再検索（最大1回の追加ラウンド）
-        if evaluation.has_insufficient:
+        # 不足カテゴリの再検索（日程数に応じて最大3ラウンドまで）
+        max_supplement_rounds = min(3, max(1, (constraints.duration_days or 2) // 3))
+        supplement_round = 0
+
+        while evaluation.has_insufficient and supplement_round < max_supplement_rounds:
+            supplement_round += 1
             supplement_start = time.time()
             insufficient_categories = []
             hints_per_category = {}
@@ -361,30 +391,46 @@ class TravelPlanningOrchestrator:
                 except ValueError:
                     logger.warning(f"Unknown category in evaluation: {ic.category}")
 
-            if insufficient_categories:
-                logger.info(
-                    f"Phase 2 supplement: re-searching {[c.value for c in insufficient_categories]}"
-                )
-                supplemental_result = await search_with_reasoning(
-                    destination=constraints.destination,
+            if not insufficient_categories:
+                break
+
+            logger.info(
+                f"Phase 2 supplement round {supplement_round}/{max_supplement_rounds}: "
+                f"re-searching {[c.value for c in insufficient_categories]}"
+            )
+            supplemental_result = await search_with_reasoning(
+                destination=constraints.destination,
+                constraints=constraints,
+                wishes=wishes,
+                categories=insufficient_categories,
+                hints_per_category=hints_per_category,
+                max_iterations=2,  # 追加検索でも2イテレーション
+            )
+
+            # 結果をマージ
+            phase1_result = self._merge_search_results(phase1_result, supplemental_result)
+
+            await self._record_event(
+                db,
+                plan_run_id,
+                step_name=f"search_phase2_supplement_round{supplement_round}",
+                agent_name="SearchReasoningLoop",
+                input_summary=f"re-search: {[c.value for c in insufficient_categories]}",
+                output_summary=f"supplemental_results: {supplemental_result.status.total_results}",
+                latency_ms=int((time.time() - supplement_start) * 1000),
+            )
+
+            # 追加検索後に再評価（最終ラウンド以外）
+            if supplement_round < max_supplement_rounds:
+                evaluation = await search_evaluator_agent.evaluate(
+                    search_results=phase1_result.results,
                     constraints=constraints,
                     wishes=wishes,
-                    categories=insufficient_categories,
-                    hints_per_category=hints_per_category,
-                    max_iterations=1,
                 )
-
-                # 結果をマージ
-                phase1_result = self._merge_search_results(phase1_result, supplemental_result)
-
-                await self._record_event(
-                    db,
-                    plan_run_id,
-                    step_name="search_phase2_supplement",
-                    agent_name="SearchReasoningLoop",
-                    input_summary=f"re-search: {[c.value for c in insufficient_categories]}",
-                    output_summary=f"supplemental_results: {supplemental_result.status.total_results}",
-                    latency_ms=int((time.time() - supplement_start) * 1000),
+                logger.info(
+                    f"Re-evaluation after round {supplement_round}: "
+                    f"sufficient={evaluation.sufficient_categories}, "
+                    f"insufficient={[ic.category for ic in evaluation.insufficient_categories]}"
                 )
 
         # 最終ログ
@@ -485,6 +531,102 @@ class TravelPlanningOrchestrator:
 
         return normalized
 
+    async def _step_save_pois_to_db(
+        self,
+        db: AsyncSession,
+        plan_run_id: str,
+        destination: str,
+        normalized_pois: dict,
+    ) -> dict:
+        """ステップ3.5: POI DBに保存（PTSアーキテクチャ）
+
+        検索結果をpoi_cacheに保存し、後のPlannerで参照可能にする。
+        同じ(destination, category, name)の組み合わせは上書き。
+
+        Returns:
+            POI名 -> POICache IDのマッピング
+        """
+        start_time = time.time()
+        poi_cache_map: dict[str, str] = {}
+        total_saved = 0
+
+        for category, pois in normalized_pois.items():
+            if not pois:
+                continue
+
+            saved_pois = await poi_repository.save_search_results(
+                db=db,
+                destination=destination,
+                category=category,
+                pois=pois,
+            )
+
+            for poi_cache in saved_pois:
+                poi_cache_map[poi_cache.name] = poi_cache.id
+                total_saved += 1
+
+        await self._record_event(
+            db,
+            plan_run_id,
+            step_name="save_pois_to_db",
+            agent_name="POIRepository",
+            input_summary=f"destination: {destination}",
+            output_summary=f"saved: {total_saved} POIs to DB",
+            latency_ms=int((time.time() - start_time) * 1000),
+        )
+
+        return poi_cache_map
+
+    async def _step_link_pois_to_request(
+        self,
+        db: AsyncSession,
+        plan_run_id: str,
+        request_id: str,
+        ranked_pois: dict,
+        poi_cache_map: dict[str, str],
+    ) -> None:
+        """ステップ4.5: TravelSearchResultにリンク（PTSアーキテクチャ）
+
+        リランク済みPOIをTravelPlanRequestに紐付け、
+        スコアを保存してPlannerが参照できるようにする。
+        """
+        start_time = time.time()
+        total_linked = 0
+
+        for category, pois in ranked_pois.items():
+            poi_scores = []
+            for poi in pois:
+                poi_id = poi_cache_map.get(poi.name)
+                if not poi_id:
+                    continue
+
+                # POIからスコアを取得
+                rerank_score = getattr(poi, "final_score", 0.5)
+                constraint_score = getattr(poi, "relevance_score", 0.5)
+
+                # POICacheオブジェクトを取得
+                poi_cache = await db.get(POICache, poi_id)
+                if poi_cache:
+                    poi_scores.append((poi_cache, rerank_score, constraint_score))
+
+            if poi_scores:
+                await poi_repository.link_pois_to_request(
+                    db=db,
+                    request_id=request_id,
+                    poi_scores=poi_scores,
+                )
+                total_linked += len(poi_scores)
+
+        await self._record_event(
+            db,
+            plan_run_id,
+            step_name="link_pois_to_request",
+            agent_name="POIRepository",
+            input_summary=f"request: {request_id}",
+            output_summary=f"linked: {total_linked} POIs",
+            latency_ms=int((time.time() - start_time) * 1000),
+        )
+
     async def _step_rerank(
         self,
         db: AsyncSession,
@@ -561,6 +703,60 @@ class TravelPlanningOrchestrator:
         )
 
         return result
+
+    async def _step_mark_selected_pois(
+        self,
+        db: AsyncSession,
+        plan_run_id: str,
+        request_id: str,
+        itinerary,
+    ) -> None:
+        """ステップ5.5: 選択されたPOIをマーク（PTSアーキテクチャ）
+
+        Plannerが選んだPOIをTravelSearchResultでis_selected=Trueに設定。
+        後のExplainerや分析に利用。
+        """
+        start_time = time.time()
+
+        # 旅程から選択されたPOI名を抽出
+        selected_poi_names: set[str] = set()
+        for day in itinerary.days:
+            for item in day.items:
+                if item.poi and item.poi.name:
+                    selected_poi_names.add(item.poi.name)
+            if day.accommodation and day.accommodation.name:
+                selected_poi_names.add(day.accommodation.name)
+
+        # TravelSearchResultを更新
+        from sqlalchemy import select, and_
+        from app.domain.models import TravelSearchResult
+
+        result = await db.execute(
+            select(TravelSearchResult).where(
+                and_(
+                    TravelSearchResult.request_id == request_id,
+                    TravelSearchResult.poi.has(
+                        POICache.name.in_(selected_poi_names)
+                    ),
+                )
+            )
+        )
+        search_results = result.scalars().all()
+
+        for sr in search_results:
+            sr.is_selected = True
+
+        await db.flush()
+
+        await self._record_event(
+            db,
+            plan_run_id,
+            step_name="mark_selected_pois",
+            agent_name="POIRepository",
+            input_summary=f"request: {request_id}",
+            output_summary=f"marked: {len(search_results)} POIs as selected",
+            latency_ms=int((time.time() - start_time) * 1000),
+        )
 
     async def _step_explain(
         self,

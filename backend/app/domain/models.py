@@ -308,6 +308,10 @@ class TravelPlanRequest(Base):
         back_populates="request",
         cascade="all, delete-orphan",
     )
+    search_results: Mapped[list["TravelSearchResult"]] = relationship(
+        back_populates="request",
+        cascade="all, delete-orphan",
+    )
 
 
 class TravelPlan(Base):
@@ -360,7 +364,14 @@ class TravelPlan(Base):
 
 
 class POICache(Base):
-    """POI（Point of Interest）キャッシュ"""
+    """POI（Point of Interest）キャッシュ
+
+    PTSアーキテクチャ対応（RealTravel/Google Local形式）:
+    - destination（検索目的地）でPOIをグループ化
+    - 同じ(destination, category, name)の組み合わせで一意
+    - 検索のたびに上書き更新可能
+    - 構造化されたPOIメタデータ（rating, price_level, hours等）
+    """
 
     __tablename__ = "poi_cache"
 
@@ -369,23 +380,94 @@ class POICache(Base):
         primary_key=True,
         default=lambda: str(uuid4()),
     )
-    # 正規化されたPOI情報
+    # 検索目的地（京都、箱根など）
+    destination: Mapped[str] = mapped_column(
+        String(255),
+        default="",
+        index=True,
+    )
+    # === 基本情報 ===
     name: Mapped[str] = mapped_column(
         String(255),
     )
     category: Mapped[str] = mapped_column(
         String(50),
-    )  # activity, food, hotel
+        index=True,
+    )  # activity, food, hotel, transportation
+    description: Mapped[str] = mapped_column(
+        Text,
+        default="",
+    )  # POIの説明文
+
+    # === 位置情報 ===
     location: Mapped[str] = mapped_column(
         String(255),
         default="",
-    )  # 地域・住所
-    # 詳細情報
-    details: Mapped[dict] = mapped_column(
+    )  # 地区名・エリア名
+    address: Mapped[str] = mapped_column(
+        Text,
+        default="",
+    )  # 詳細住所
+    latitude: Mapped[float | None] = mapped_column(
+        nullable=True,
+    )  # 緯度
+    longitude: Mapped[float | None] = mapped_column(
+        nullable=True,
+    )  # 経度
+
+    # === 評価・レビュー情報（PTS形式） ===
+    rating: Mapped[float | None] = mapped_column(
+        nullable=True,
+    )  # 評価 (1.0-5.0)
+    review_count: Mapped[int | None] = mapped_column(
+        nullable=True,
+    )  # レビュー数
+
+    # === 価格情報 ===
+    price_level: Mapped[int | None] = mapped_column(
+        nullable=True,
+    )  # 価格帯 (1=安い, 2=普通, 3=高め, 4=高級)
+    price_range: Mapped[str] = mapped_column(
+        String(100),
+        default="",
+    )  # 価格帯テキスト（例: "¥1,000〜2,000"）
+    budget_per_person: Mapped[int | None] = mapped_column(
+        nullable=True,
+    )  # 1人あたり予算（円）
+
+    # === 時間情報 ===
+    hours: Mapped[dict | None] = mapped_column(
         JSONB,
-        default=dict,
-    )  # 営業時間、価格、特徴など
-    # ソース情報
+        nullable=True,
+    )  # 営業時間 {"mon": "9:00-18:00", "tue": "9:00-18:00", ...}
+    duration_minutes: Mapped[int | None] = mapped_column(
+        nullable=True,
+    )  # 所要時間（分）
+
+    # === 特徴・タグ（PTS形式） ===
+    features: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=list,
+    )  # 特徴タグ ["WiFi", "駐車場", "クレジットカード可", ...]
+    tags: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=list,
+    )  # 一般タグ ["観光名所", "歴史", "自然", ...]
+
+    # === 体験情報（本システム独自） ===
+    experiences: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=list,
+    )  # 体験タグ ["歴史的建造物巡り", "写真映えスポット", ...]
+    embedding: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )  # 体験ベースの埋め込みベクトル
+
+    # === ソース情報 ===
     source_url: Mapped[str] = mapped_column(
         Text,
         default="",
@@ -394,17 +476,12 @@ class POICache(Base):
         String(100),
         default="",
     )  # tavily, etc.
-    # 抽出された体験タグ
-    experiences: Mapped[list | None] = mapped_column(
+
+    # === メタデータ ===
+    details: Mapped[dict] = mapped_column(
         JSONB,
-        nullable=True,
-        default=list,
-    )  # ["歴史的建造物巡り", "写真映えスポット", ...]
-    # 体験ベースの埋め込みベクトル
-    embedding: Mapped[list | None] = mapped_column(
-        JSONB,
-        nullable=True,
-    )
+        default=dict,
+    )  # その他の詳細情報（後方互換性）
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=_utcnow,
@@ -417,6 +494,68 @@ class POICache(Base):
         DateTime,
         default=_utcnow,
     )
+
+
+class TravelSearchResult(Base):
+    """旅行検索結果（TravelPlanRequestとPOIの紐付け）
+
+    PTSアーキテクチャ対応:
+    - 検索リクエストごとに見つかったPOIを記録
+    - Rerankerによるスコアを保存
+    - Plannerが参照するPOIプールとして機能
+    """
+
+    __tablename__ = "travel_search_results"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    request_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("travel_plan_requests.id", ondelete="CASCADE"),
+        index=True,
+    )
+    poi_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("poi_cache.id", ondelete="CASCADE"),
+        index=True,
+    )
+    # カテゴリ（検索時のカテゴリ）
+    category: Mapped[str] = mapped_column(
+        String(50),
+    )  # activity, food, hotel, transportation
+    # Rerankerによるスコア
+    rerank_score: Mapped[float] = mapped_column(
+        default=0.0,
+    )  # 嗜好ベースのスコア（0.0〜1.0）
+    # 制約充足スコア
+    constraint_score: Mapped[float] = mapped_column(
+        default=0.0,
+    )  # 制約を満たす度合い（0.0〜1.0）
+    # 総合スコア
+    total_score: Mapped[float] = mapped_column(
+        default=0.0,
+    )  # rerank_score * weight + constraint_score * weight
+    # Plannerで選択されたか
+    is_selected: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+    # 選択理由（Explainer用）
+    selection_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=_utcnow,
+    )
+
+    # リレーション
+    request: Mapped["TravelPlanRequest"] = relationship(back_populates="search_results")
+    poi: Mapped["POICache"] = relationship()
 
 
 class PlanRun(Base):

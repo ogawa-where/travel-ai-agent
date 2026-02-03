@@ -22,7 +22,7 @@
       "host": "172.28.208.213:11434",
       "role": "search",
       "max_concurrent": 2,
-      "description": "mafu - Transportation search (search phase only)"
+      "description": "mafu - Transportation search (native)"
     }
   ],
   "routing": {

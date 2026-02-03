@@ -24,6 +24,7 @@ from app.schemas.travel_planning import (
     POIFeedbackRequest,
     POIFeedbackResponse,
     POIFeedbackType,
+    RequiredInfoStatus,
     SearchQuery,
     TranslateRequestInput,
     TravelChatRequest,
@@ -458,12 +459,13 @@ async def start_gathering(
         db, user_id, mode="travel_planning"
     )
 
-    # 基本情報を保存
+    # 基本情報を保存（予算も含める）
     collected_info = CollectedTravelInfo(
         area=request.area,
         start_date=request.start_date,
         end_date=request.end_date,
         num_people=request.num_people,
+        budget=request.budget,
     )
 
     # セッションに収集情報を保存（extra_dataとして）
@@ -480,12 +482,23 @@ async def start_gathering(
 
     await db.commit()
 
+    # 必須情報のステータスを取得
+    required_status = gathering_agent._check_required_info(collected_info)
+    missing_required = gathering_agent._get_missing_required_info(collected_info)
+    missing_optional = gathering_agent._get_missing_optional_info(collected_info)
+
     return TravelGatheringResponse(
         session_id=session.id,
         assistant_message=greeting,
         collected_info=collected_info,
-        is_ready=False,
-        missing_info=["予算", "食の好み", "やりたいこと", "宿泊の希望", "移動手段", "旅のペース"],
+        # 新しいフィールド
+        required_info_status=required_status,
+        all_required_satisfied=required_status.is_complete,
+        missing_required_info=missing_required,
+        missing_optional_info=missing_optional,
+        # 互換性のため維持
+        is_ready=required_status.is_complete,
+        missing_info=missing_required + missing_optional,
     )
 
 
@@ -544,12 +557,23 @@ async def gathering_chat(
 
     await db.commit()
 
+    # 必須情報のステータスを取得
+    required_status = gathering_agent._check_required_info(updated_info)
+    missing_required = gathering_agent._get_missing_required_info(updated_info)
+    missing_optional = gathering_agent._get_missing_optional_info(updated_info)
+
     return TravelGatheringResponse(
         session_id=session.id,
         assistant_message=response,
         collected_info=updated_info,
-        is_ready=is_ready,
-        missing_info=missing_info,
+        # 新しいフィールド
+        required_info_status=required_status,
+        all_required_satisfied=required_status.is_complete,
+        missing_required_info=missing_required,
+        missing_optional_info=missing_optional,
+        # 互換性のため維持
+        is_ready=required_status.is_complete,
+        missing_info=missing_required + missing_optional,
     )
 
 
@@ -623,11 +647,31 @@ async def gathering_chat_stream(
 
             await db.commit()
 
+            # 必須情報のステータスを計算
+            required_status = gathering_agent._check_required_info(final_info)
+            missing_required = gathering_agent._get_missing_required_info(final_info)
+            missing_optional = gathering_agent._get_missing_optional_info(final_info)
+            # AIの判定に基づく（final_is_ready は AIが「準備ができました」と言ったかどうか）
+            all_required_satisfied = final_is_ready
+
             # 収集情報を送信
             yield f"data: {json.dumps({'type': 'info', 'collected_info': final_info.model_dump()}, ensure_ascii=False)}\n\n"
 
-            # 完了イベントを送信
-            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id), 'is_ready': final_is_ready, 'missing_info': final_missing, 'collected_info': final_info.model_dump()}, ensure_ascii=False)}\n\n"
+            # 完了イベントを送信（新しいフィールドを含む）
+            done_data = {
+                'type': 'done',
+                'session_id': str(session.id),
+                'collected_info': final_info.model_dump(),
+                # 新しいフィールド
+                'required_info_status': required_status.model_dump(),
+                'all_required_satisfied': all_required_satisfied,
+                'missing_required_info': missing_required,
+                'missing_optional_info': missing_optional,
+                # 互換性のため維持
+                'is_ready': all_required_satisfied,
+                'missing_info': missing_required + missing_optional,
+            }
+            yield f"data: {json.dumps(done_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f"Gathering stream error: {e}")

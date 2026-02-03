@@ -2,7 +2,7 @@
 import { ref, nextTick, computed } from 'vue'
 import { api } from '../lib/api'
 import { getErrorMessage } from '../lib/errors'
-import type { User, TravelPlan, CollectedTravelInfo, BasicTravelInfo } from '../lib/api'
+import type { User, TravelPlan, CollectedTravelInfo, BasicTravelInfo, RequiredInfoStatus } from '../lib/api'
 import TravelPlanCard from './TravelPlanCard.vue'
 import TravelPlanForm from './TravelPlanForm.vue'
 
@@ -47,6 +47,18 @@ const collectedInfo = ref<CollectedTravelInfo>({
 })
 const missingInfo = ref<string[]>([])
 
+// 4カテゴリの収集状況
+const requiredInfoStatus = ref<RequiredInfoStatus>({
+  has_activities: false,
+  has_food: false,
+  has_accommodation: false,
+  has_transportation: false,
+  category_count: 0,
+  is_complete: false,
+})
+const allRequiredSatisfied = ref(false)
+const missingRequiredInfo = ref<string[]>(['やりたいこと', '食の好み', '宿泊の希望', '移動手段'])
+
 // IME変換状態を追跡
 const handleCompositionStart = () => {
   isComposing.value = true
@@ -89,45 +101,28 @@ const tripDays = computed(() => {
   return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1
 })
 
-// Phase 1: フォーム送信 → gatheringフェーズへ
+// Phase 1: フォーム送信 → 直接プラン生成へ
 const handleFormSubmit = async (data: BasicTravelInfo) => {
   if (!props.user) return
 
   basicInfo.value = data
+
+  // フォームの情報をcollectedInfoに変換
   collectedInfo.value = {
     area: data.area,
     start_date: data.start_date,
     end_date: data.end_date,
     num_people: data.num_people,
+    budget: data.budget,
+    // 4カテゴリ（文字列をリストに変換）
+    activity_preferences: data.activity_preferences ? [data.activity_preferences] : [],
+    food_preferences: data.food_preferences ? [data.food_preferences] : [],
+    accommodation_type: data.accommodation_type || undefined,
+    transportation: data.transportation || undefined,
   }
 
-  isLoading.value = true
-
-  try {
-    const response = await api.startTravelGathering(data)
-    sessionId.value = response.session_id
-    collectedInfo.value = response.collected_info
-    missingInfo.value = response.missing_info
-
-    messages.value = [{
-      role: 'assistant',
-      content: response.assistant_message,
-    }]
-
-    phase.value = 'gathering'
-    await scrollToBottom()
-  } catch (error) {
-    console.error('Failed to start gathering:', error)
-    // エラー時もgatheringフェーズに遷移
-    messages.value = [{
-      role: 'assistant',
-      content: `${collectedInfo.value.area}への旅行ですね！\n\nいくつか質問させてください。\n\n予算はどのくらいをお考えですか？`,
-    }]
-    phase.value = 'gathering'
-    await scrollToBottom()
-  } finally {
-    isLoading.value = false
-  }
+  // 直接プラン生成へ
+  await startPlanGenerationFromForm()
 }
 
 // Phase 2: 情報収集の対話
@@ -175,6 +170,10 @@ const sendGatheringMessage = async () => {
         sessionId.value = response.session_id
         collectedInfo.value = response.collected_info
         missingInfo.value = response.missing_info
+        // 新しいフィールド
+        requiredInfoStatus.value = response.required_info_status
+        allRequiredSatisfied.value = response.all_required_satisfied
+        missingRequiredInfo.value = response.missing_required_info
         isStreaming.value = false
         streamingMessageIndex.value = -1
       },
@@ -210,7 +209,66 @@ const backToGathering = () => {
   phase.value = 'gathering'
 }
 
-// Phase 3 → Phase 4: プラン生成開始
+// フォームから直接プラン生成を開始
+const startPlanGenerationFromForm = async () => {
+  if (!props.user || !basicInfo.value) return
+
+  phase.value = 'planning'
+  isLoading.value = true
+  messages.value = []
+
+  try {
+    // フォームデータをTravelPlanFormDataに変換
+    const formData = {
+      user_id: props.user.id,
+      destination: basicInfo.value.area,
+      start_date: basicInfo.value.start_date,
+      end_date: basicInfo.value.end_date,
+      num_people: basicInfo.value.num_people,
+      budget_total: basicInfo.value.budget,
+      transportation: basicInfo.value.transportation || undefined,
+      accommodation_type: basicInfo.value.accommodation_type || undefined,
+      // free_textに4カテゴリの希望を含める
+      free_text: [
+        basicInfo.value.activity_preferences ? `やりたいこと: ${basicInfo.value.activity_preferences}` : '',
+        basicInfo.value.food_preferences ? `食の好み: ${basicInfo.value.food_preferences}` : '',
+      ].filter(Boolean).join('。'),
+    }
+
+    const response = await api.submitTravelForm(formData)
+    sessionId.value = response.session_id
+
+    if (response.plan) {
+      currentPlan.value = response.plan
+      messages.value = [{
+        role: 'assistant',
+        content: response.assistant_message,
+        plan: response.plan,
+      }]
+      emit('plan-created', response.plan)
+    } else {
+      messages.value = [{
+        role: 'assistant',
+        content: response.assistant_message,
+      }]
+    }
+
+    phase.value = 'result'
+    await scrollToBottom()
+  } catch (error) {
+    console.error('Failed to generate plan:', error)
+    messages.value = [{
+      role: 'assistant',
+      content: `プランの生成に失敗しました。\n${getErrorMessage(error)}`,
+    }]
+    phase.value = 'result'
+    await scrollToBottom()
+  } finally {
+    isLoading.value = false
+  }
+}
+
+// Phase 3 → Phase 4: プラン生成開始（gatheringフェーズから）
 const startPlanGeneration = async () => {
   if (!props.user || !sessionId.value) return
 
@@ -326,6 +384,17 @@ const startNewPlan = () => {
     num_people: 1,
   }
   missingInfo.value = []
+  // 4カテゴリ状態のリセット
+  requiredInfoStatus.value = {
+    has_activities: false,
+    has_food: false,
+    has_accommodation: false,
+    has_transportation: false,
+    category_count: 0,
+    is_complete: false,
+  }
+  allRequiredSatisfied.value = false
+  missingRequiredInfo.value = ['やりたいこと', '食の好み', '宿泊の希望', '移動手段']
 }
 
 const handleFeedback = async (feedback: string) => {
@@ -397,15 +466,40 @@ const formatCollectedInfo = computed(() => {
         <div class="header-content">
           <div>
             <h2>{{ collectedInfo.area }}への旅行</h2>
-            <p>詳細をお聞かせください</p>
+            <p v-if="!allRequiredSatisfied">詳細をお聞かせください</p>
+            <p v-else>準備完了！プランを作成できます</p>
           </div>
+          <!-- 必須情報が揃ったらプラン作成ボタンを表示 -->
           <button
-            class="finish-btn"
-            @click="finishGathering"
+            v-if="allRequiredSatisfied"
+            class="generate-header-btn"
+            @click="startPlanGeneration"
             :disabled="isLoading"
           >
-            情報収集を完了
+            プランを作成
           </button>
+        </div>
+        <!-- 4カテゴリ収集状況インジケーター -->
+        <div class="collected-progress">
+          <div class="progress-item" :class="{ completed: requiredInfoStatus.has_activities }">
+            <span class="check-icon">{{ requiredInfoStatus.has_activities ? '✓' : '○' }}</span>
+            <span>体験</span>
+          </div>
+          <div class="progress-item" :class="{ completed: requiredInfoStatus.has_food }">
+            <span class="check-icon">{{ requiredInfoStatus.has_food ? '✓' : '○' }}</span>
+            <span>食</span>
+          </div>
+          <div class="progress-item" :class="{ completed: requiredInfoStatus.has_accommodation }">
+            <span class="check-icon">{{ requiredInfoStatus.has_accommodation ? '✓' : '○' }}</span>
+            <span>宿</span>
+          </div>
+          <div class="progress-item" :class="{ completed: requiredInfoStatus.has_transportation }">
+            <span class="check-icon">{{ requiredInfoStatus.has_transportation ? '✓' : '○' }}</span>
+            <span>交通</span>
+          </div>
+          <div class="progress-count">
+            {{ requiredInfoStatus.category_count }}/4
+          </div>
         </div>
       </div>
 
@@ -595,9 +689,10 @@ const formatCollectedInfo = computed(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 1rem;
-  overflow-y: auto;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .no-user-message {
@@ -640,8 +735,8 @@ const formatCollectedInfo = computed(() => {
   overflow: hidden;
 }
 
-.finish-btn,
-.new-plan-btn {
+.new-plan-btn,
+.generate-header-btn {
   padding: 6px 14px;
   background: rgba(255, 255, 255, 0.2);
   color: white;
@@ -653,15 +748,62 @@ const formatCollectedInfo = computed(() => {
   white-space: nowrap;
 }
 
-.finish-btn:hover:not(:disabled),
-.new-plan-btn:hover:not(:disabled) {
+.generate-header-btn {
+  background: #48bb78;
+  border-color: #48bb78;
+  font-weight: 600;
+}
+
+.new-plan-btn:hover:not(:disabled),
+.generate-header-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.3);
 }
 
-.finish-btn:disabled,
-.new-plan-btn:disabled {
+.generate-header-btn:hover:not(:disabled) {
+  background: #38a169;
+}
+
+.new-plan-btn:disabled,
+.generate-header-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 収集状況の進捗インジケーター */
+.collected-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.collected-progress .progress-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  transition: color 0.2s;
+}
+
+.collected-progress .progress-item.completed {
+  color: #9ae6b4;
+}
+
+.collected-progress .check-icon {
+  font-size: 0.8rem;
+}
+
+.collected-progress .progress-count {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.2);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
 }
 
 /* チャットコンテナ */

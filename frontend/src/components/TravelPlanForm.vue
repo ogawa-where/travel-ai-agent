@@ -7,6 +7,12 @@ interface BasicTravelInfo {
   start_date: string
   end_date: string
   num_people: number
+  budget: number  // 予算（円）- 必須
+  // 4カテゴリ（任意）
+  activity_preferences?: string  // 体験・観光の希望
+  food_preferences?: string  // 食の希望
+  accommodation_type?: string  // 宿泊の希望
+  transportation?: string  // 交通の希望
 }
 
 interface Props {
@@ -27,6 +33,13 @@ const area = ref('')
 const startDate = ref('')
 const endDate = ref('')
 const numPeople = ref(1)
+const budget = ref<number | null>(null)
+
+// 4カテゴリ（任意）
+const activityPreferences = ref('')
+const foodPreferences = ref('')
+const accommodationType = ref('')
+const transportation = ref('')
 
 const isValid = computed(() => {
   if (!area.value.trim()) return false
@@ -34,6 +47,7 @@ const isValid = computed(() => {
   if (!endDate.value) return false
   if (startDate.value > endDate.value) return false
   if (numPeople.value < 1) return false
+  if (!budget.value || budget.value <= 0) return false  // 予算必須
   return true
 })
 
@@ -42,6 +56,16 @@ const dateError = computed(() => {
     return '帰着日は出発日以降を選択してください'
   }
   return ''
+})
+
+// バリデーションエラーメッセージ
+const validationErrors = computed(() => {
+  const errors: string[] = []
+  if (!area.value.trim()) errors.push('観光エリア')
+  if (!startDate.value) errors.push('出発日')
+  if (!endDate.value) errors.push('帰着日')
+  if (!budget.value || budget.value <= 0) errors.push('予算')
+  return errors
 })
 
 const tripDays = computed(() => {
@@ -61,6 +85,12 @@ const handleSubmit = () => {
     start_date: startDate.value,
     end_date: endDate.value,
     num_people: numPeople.value,
+    budget: budget.value!,
+    // 4カテゴリ（任意）
+    activity_preferences: activityPreferences.value.trim() || undefined,
+    food_preferences: foodPreferences.value.trim() || undefined,
+    accommodation_type: accommodationType.value.trim() || undefined,
+    transportation: transportation.value.trim() || undefined,
   }
 
   emit('submit', data)
@@ -120,16 +150,80 @@ const handleSubmit = () => {
         <p v-else-if="tripDays" class="field-info">{{ tripDays }}日間の旅行</p>
       </div>
 
-      <!-- 人数 -->
+      <!-- 人数と予算 -->
       <div class="form-section">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="numPeople">人数</label>
+            <input
+              id="numPeople"
+              v-model.number="numPeople"
+              type="number"
+              min="1"
+              max="20"
+              :disabled="isLoading"
+            />
+          </div>
+          <div class="form-group">
+            <label for="budget" class="required">予算（円）</label>
+            <input
+              id="budget"
+              v-model.number="budget"
+              type="number"
+              min="1000"
+              step="10000"
+              placeholder="例: 50000"
+              required
+              :disabled="isLoading"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- 4カテゴリの希望（任意） -->
+      <div class="form-section">
+        <p class="section-title">希望があれば入力してください（任意）</p>
+
         <div class="form-group">
-          <label for="numPeople">人数</label>
+          <label for="activityPreferences">体験・観光</label>
           <input
-            id="numPeople"
-            v-model.number="numPeople"
-            type="number"
-            min="1"
-            max="20"
+            id="activityPreferences"
+            v-model="activityPreferences"
+            type="text"
+            placeholder="例: 温泉、景色を楽しむ、美術館"
+            :disabled="isLoading"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="foodPreferences">食事</label>
+          <input
+            id="foodPreferences"
+            v-model="foodPreferences"
+            type="text"
+            placeholder="例: 和食、地元の名物、海鮮"
+            :disabled="isLoading"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="accommodationType">宿泊</label>
+          <input
+            id="accommodationType"
+            v-model="accommodationType"
+            type="text"
+            placeholder="例: 旅館、ホテル、民宿"
+            :disabled="isLoading"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="transportation">移動手段</label>
+          <input
+            id="transportation"
+            v-model="transportation"
+            type="text"
+            placeholder="例: レンタカー、公共交通機関、徒歩"
             :disabled="isLoading"
           />
         </div>
@@ -137,12 +231,15 @@ const handleSubmit = () => {
 
       <!-- ボタン -->
       <div class="form-actions">
+        <p v-if="validationErrors.length > 0" class="validation-hint">
+          未入力: {{ validationErrors.join('、') }}
+        </p>
         <button
           type="submit"
           class="btn-submit"
           :disabled="!isValid || isLoading"
         >
-          次へ：詳細を入力
+          {{ isLoading ? 'プラン作成中...' : 'プランを作成' }}
         </button>
       </div>
     </form>
@@ -153,10 +250,13 @@ const handleSubmit = () => {
 .travel-plan-form {
   background: white;
   border-radius: 12px;
-  overflow: hidden;
   border: 1px solid #e2e8f0;
   max-width: 500px;
   margin: 0 auto;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .form-header {
@@ -178,6 +278,8 @@ const handleSubmit = () => {
 
 .form-body {
   padding: 1.25rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .form-section {
@@ -189,6 +291,13 @@ const handleSubmit = () => {
 .form-section:last-of-type {
   border-bottom: none;
   margin-bottom: 0;
+}
+
+.section-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #4a5568;
+  margin: 0 0 0.75rem;
 }
 
 .form-group {
@@ -265,6 +374,13 @@ const handleSubmit = () => {
 
 .form-actions {
   padding-top: 0.5rem;
+}
+
+.validation-hint {
+  color: #e53e3e;
+  font-size: 0.8rem;
+  margin: 0 0 0.5rem;
+  text-align: center;
 }
 
 .btn-submit {

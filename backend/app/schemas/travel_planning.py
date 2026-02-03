@@ -112,31 +112,63 @@ class TravelWishes(BaseModel):
 
 
 class POIBase(BaseModel):
-    """POI基本情報"""
+    """POI基本情報（PTS/RealTravel形式）
 
+    Google Local / RealTravel データセットの構造を模倣:
+    - 基本情報: name, category, description
+    - 位置情報: location, address, latitude, longitude
+    - 評価情報: rating, review_count
+    - 価格情報: price_level, price_range, budget_per_person
+    - 時間情報: hours, duration_minutes
+    - 特徴情報: features, tags
+    """
+
+    # === 基本情報 ===
     name: str
     category: POICategory
-    location: str | None = ""
     description: str | None = ""
-    price_range: str | None = ""  # 例: "¥1,000-2,000"
-    duration_minutes: int | None = None  # 所要時間
-    opening_hours: str | None = ""
-    rating: float | None = None
-    tags: list[str] | None = Field(default_factory=list)
-    source_url: str | None = ""
+
+    # === 位置情報 ===
+    location: str | None = ""  # 地区名・エリア名
+    address: str | None = ""  # 詳細住所
     latitude: float | None = None
     longitude: float | None = None
 
+    # === 評価・レビュー情報（PTS形式） ===
+    rating: float | None = None  # 評価 (1.0-5.0)
+    review_count: int | None = None  # レビュー数
+
+    # === 価格情報 ===
+    price_level: int | None = None  # 価格帯 (1=安い, 2=普通, 3=高め, 4=高級)
+    price_range: str | None = ""  # 価格帯テキスト（例: "¥1,000〜2,000"）
+    budget_per_person: int | None = None  # 1人あたり予算（円）
+
+    # === 時間情報 ===
+    hours: dict | None = None  # 営業時間 {"mon": "9:00-18:00", ...}
+    opening_hours: str | None = ""  # 営業時間テキスト（後方互換）
+    duration_minutes: int | None = None  # 所要時間（分）
+
+    # === 特徴・タグ（PTS形式） ===
+    features: list[str] | None = Field(default_factory=list)  # 特徴タグ
+    tags: list[str] | None = Field(default_factory=list)  # 一般タグ
+
+    # === ソース情報 ===
+    source_url: str | None = ""
+
     def model_post_init(self, __context) -> None:
         """None値をデフォルト値に変換"""
-        if self.location is None:
-            object.__setattr__(self, "location", "")
         if self.description is None:
             object.__setattr__(self, "description", "")
+        if self.location is None:
+            object.__setattr__(self, "location", "")
+        if self.address is None:
+            object.__setattr__(self, "address", "")
         if self.price_range is None:
             object.__setattr__(self, "price_range", "")
         if self.opening_hours is None:
             object.__setattr__(self, "opening_hours", "")
+        if self.features is None:
+            object.__setattr__(self, "features", [])
         if self.tags is None:
             object.__setattr__(self, "tags", [])
         if self.source_url is None:
@@ -505,6 +537,13 @@ class BasicTravelInfo(BaseModel):
     start_date: str = Field(..., description="出発日 (YYYY-MM-DD)")
     end_date: str = Field(..., description="帰着日 (YYYY-MM-DD)")
     num_people: int = Field(default=1, ge=1, description="人数")
+    budget: int = Field(..., description="予算（円）")  # 必須
+
+    # 4カテゴリ（任意）
+    activity_preferences: str | None = Field(default=None, description="体験・観光の希望")
+    food_preferences: str | None = Field(default=None, description="食の希望")
+    accommodation_type: str | None = Field(default=None, description="宿泊の希望")
+    transportation: str | None = Field(default=None, description="交通の希望")
 
 
 class CollectedTravelInfo(BaseModel):
@@ -537,12 +576,39 @@ class GatheringChatRequest(BaseModel):
     session_id: str
 
 
+class RequiredInfoStatus(BaseModel):
+    """4カテゴリの収集状況"""
+
+    has_activities: bool = False  # 体験・観光
+    has_food: bool = False  # 食
+    has_accommodation: bool = False  # 宿
+    has_transportation: bool = False  # 交通
+
+    @property
+    def category_count(self) -> int:
+        """収集済みカテゴリ数"""
+        return sum([self.has_activities, self.has_food, self.has_accommodation, self.has_transportation])
+
+    @property
+    def is_complete(self) -> bool:
+        """2カテゴリ以上揃っているか"""
+        return self.category_count >= 2
+
+
 class TravelGatheringResponse(BaseModel):
     """情報収集レスポンス"""
 
     session_id: str
     assistant_message: str
     collected_info: CollectedTravelInfo
+
+    # 新しい必須情報管理
+    required_info_status: RequiredInfoStatus = Field(default_factory=RequiredInfoStatus)
+    all_required_satisfied: bool = False  # 必須情報が全て揃ったか
+    missing_required_info: list[str] = Field(default_factory=list)  # 不足している必須情報
+    missing_optional_info: list[str] = Field(default_factory=list)  # 不足している任意情報
+
+    # 既存フィールド（互換性のため維持）
     is_ready: bool = False  # 情報収集が十分かどうか
     missing_info: list[str] = Field(default_factory=list)  # まだ収集していない情報
 

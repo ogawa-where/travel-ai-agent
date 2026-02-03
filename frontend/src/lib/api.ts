@@ -243,6 +243,12 @@ interface BasicTravelInfo {
   start_date: string       // "YYYY-MM-DD"
   end_date: string         // "YYYY-MM-DD"
   num_people: number
+  budget: number           // 予算（円）- 必須
+  // 4カテゴリ（任意）
+  activity_preferences?: string
+  food_preferences?: string
+  accommodation_type?: string
+  transportation?: string
 }
 
 interface CollectedTravelInfo {
@@ -262,10 +268,25 @@ interface CollectedTravelInfo {
   special_requests?: string
 }
 
+interface RequiredInfoStatus {
+  has_activities: boolean  // 体験・観光
+  has_food: boolean  // 食
+  has_accommodation: boolean  // 宿
+  has_transportation: boolean  // 交通
+  category_count: number  // 収集済みカテゴリ数
+  is_complete: boolean  // 2カテゴリ以上揃っているか
+}
+
 interface TravelGatheringResponse {
   session_id: string
   assistant_message: string
   collected_info: CollectedTravelInfo
+  // 新しい必須情報管理
+  required_info_status: RequiredInfoStatus
+  all_required_satisfied: boolean  // 必須情報が全て揃ったか
+  missing_required_info: string[]  // 不足している必須情報
+  missing_optional_info: string[]  // 不足している任意情報
+  // 既存フィールド（互換性）
   is_ready: boolean        // 情報収集が十分かどうか
   missing_info: string[]   // まだ収集していない情報のリスト
 }
@@ -757,4 +778,4 @@ export const api = {
   },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, TravelGatheringResponse }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse }
