@@ -70,6 +70,7 @@ class RerankAgent:
             input_data.candidates,
             preference_embedding,
             input_data.wishes,
+            input_data.preference_signals,
             db,
         )
 
@@ -155,6 +156,7 @@ class RerankAgent:
         candidates: list[POISearchResult],
         preference_embedding: list[float],
         wishes: TravelWishes,
+        preference_signals: list[dict],
         db: AsyncSession | None = None,
     ) -> list[POIRanked]:
         """候補をスコアリング（体験ベース）"""
@@ -197,8 +199,10 @@ class RerankAgent:
             relevance_score = candidate.relevance_score
             final_score = 0.4 * relevance_score + 0.6 * preference_score
 
-            # マッチ理由を生成
-            match_reasons = self._generate_match_reasons(candidate, wishes)
+            # マッチ理由を生成（長期嗜好と今回の要望を区別）
+            match_reasons = self._generate_match_reasons(
+                candidate, wishes, preference_signals
+            )
 
             ranked_items.append(
                 POIRanked(
@@ -241,36 +245,48 @@ class RerankAgent:
         self,
         candidate: POISearchResult,
         wishes: TravelWishes,
-    ) -> list[str]:
-        """マッチ理由を生成"""
+        preference_signals: list[dict] | None = None,
+    ) -> list[dict]:
+        """マッチ理由を生成（長期嗜好と今回の要望を区別）
+
+        Returns:
+            list[dict]: [{"text": "温泉好き", "type": "preference"}, {"text": "きりたんぽ", "type": "wish"}]
+        """
         reasons = []
 
         # タグとwishesの照合
-        candidate_tags_lower = [t.lower() for t in candidate.tags]
+        candidate_tags_lower = [t.lower() for t in (candidate.tags or [])]
+        tags_text = " ".join(candidate_tags_lower)
         description_lower = (
             candidate.description.lower() if candidate.description else ""
         )
 
-        for activity in wishes.activities:
-            if activity.lower() in description_lower or activity.lower() in " ".join(
-                candidate_tags_lower
-            ):
-                reasons.append(f"「{activity}」に関連")
+        # 長期嗜好（preference_signals）マッチ
+        if preference_signals:
+            for signal in preference_signals:
+                if signal.get("category") == "likes":
+                    tag = signal.get("tag", "")
+                    tag_lower = tag.lower()
+                    if tag_lower and (tag_lower in description_lower or tag_lower in tags_text):
+                        reasons.append({"text": tag, "type": "preference"})
 
-        for experience in wishes.experiences:
+        # 今回の要望（wishes）マッチ
+        for activity in (wishes.activities or []):
+            if activity.lower() in description_lower or activity.lower() in tags_text:
+                reasons.append({"text": activity, "type": "wish"})
+
+        for experience in (wishes.experiences or []):
             if experience.lower() in description_lower:
-                reasons.append(f"「{experience}」の体験が可能")
+                reasons.append({"text": experience, "type": "wish"})
 
-        for food in wishes.food_preferences:
-            if food.lower() in description_lower or food.lower() in " ".join(
-                candidate_tags_lower
-            ):
-                reasons.append(f"「{food}」が楽しめる")
+        for food in (wishes.food_preferences or []):
+            if food.lower() in description_lower or food.lower() in tags_text:
+                reasons.append({"text": food, "type": "wish"})
 
         if wishes.mood and wishes.mood.lower() in description_lower:
-            reasons.append(f"「{wishes.mood}」な雰囲気")
+            reasons.append({"text": wishes.mood, "type": "wish"})
 
-        return reasons[:3]  # 最大3つ
+        return reasons[:4]  # 最大4つ
 
     def clear_cache(self):
         """埋め込みキャッシュをクリア"""

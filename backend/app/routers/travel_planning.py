@@ -229,6 +229,160 @@ async def plan_with_form(
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
 
 
+@router.post("/plan-with-form/stream")
+async def plan_with_form_stream(
+    request: TravelPlanFormRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    構造化フォームから旅行プランを生成（SSEで進捗通知）
+
+    進捗イベント:
+    - {"type": "progress", "phase": "translate", "percent": 0}
+    - {"type": "progress", "phase": "search", "percent": 16}
+    - {"type": "progress", "phase": "normalize", "percent": 33}
+    - {"type": "progress", "phase": "rerank", "percent": 50}
+    - {"type": "progress", "phase": "plan", "percent": 66}
+    - {"type": "progress", "phase": "explain", "percent": 83}
+    - {"type": "progress", "phase": "complete", "percent": 100}
+    - {"type": "done", "plan": {...}, "session_id": "..."}
+    - {"type": "error", "message": "..."}
+    """
+    import asyncio
+
+    # ユーザーを取得
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.profile), selectinload(User.preference_signals))
+        .where(User.id == request.user_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # セッションを作成
+    session = await session_manager.create_session(
+        db, request.user_id, mode="travel_planning"
+    )
+
+    # フォームからconstraintsを直接変換（LLMバイパス）
+    constraints = request.to_constraints()
+
+    # free_textがあればTranslator Agentでwishesのみ抽出
+    wishes = None
+    if request.free_text.strip():
+        wishes = await _extract_wishes_only(
+            request.free_text,
+            user_profile_summary=user.profile.summary if user.profile else "",
+            preference_signals=[
+                {
+                    "category": s.category,
+                    "tag": s.tag,
+                    "weight": s.weight,
+                }
+                for s in (user.preference_signals or [])
+            ],
+        )
+
+    # raw_requestを構築（検索用テキスト）
+    raw_request = request.build_raw_request()
+
+    # TravelPlanRequestを作成
+    plan_request = TravelPlanRequest(
+        session_id=session.id,
+        user_id=request.user_id,
+        raw_request=raw_request,
+        status="pending",
+    )
+    db.add(plan_request)
+    await db.flush()
+
+    # ユーザーメッセージを保存
+    await session_manager.add_message(db, session.id, role="user", content=raw_request)
+
+    # プロフィール情報を準備
+    profile_summary = user.profile.summary if user.profile else ""
+    preference_signals = [
+        {
+            "category": s.category,
+            "tag": s.tag,
+            "weight": s.weight,
+            "evidence": s.evidence,
+        }
+        for s in (user.preference_signals or [])
+    ]
+
+    # 進捗通知用のキュー
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    async def on_progress(phase: str, percent: int):
+        await progress_queue.put({"type": "progress", "phase": phase, "percent": percent})
+
+    async def generate_stream() -> AsyncGenerator[str, None]:
+        """SSE形式でストリームを生成"""
+        try:
+            # オーケストレーター実行タスク
+            async def run_orchestrator():
+                return await travel_orchestrator.execute(
+                    db=db,
+                    request=plan_request,
+                    user_profile_summary=profile_summary,
+                    preference_signals=preference_signals,
+                    pre_constraints=constraints,
+                    pre_wishes=wishes,
+                    on_progress=on_progress,
+                )
+
+            # オーケストレーターを非同期で実行
+            orchestrator_task = asyncio.create_task(run_orchestrator())
+
+            # 進捗イベントをストリーミング
+            while not orchestrator_task.done():
+                try:
+                    event = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    continue
+
+            # 残りの進捗イベントを送信
+            while not progress_queue.empty():
+                event = await progress_queue.get()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            # オーケストレーターの結果を取得
+            travel_plan = await orchestrator_task
+
+            assistant_message = _format_plan_response(travel_plan)
+
+            await session_manager.add_message(
+                db, session.id, role="assistant", content=assistant_message
+            )
+
+            # 完了イベントを送信
+            done_data = {
+                "type": "done",
+                "session_id": str(session.id),
+                "plan_request_id": str(plan_request.id),
+                "plan": TravelPlanResponse.model_validate(travel_plan).model_dump(),
+                "assistant_message": assistant_message,
+            }
+            yield f"data: {json.dumps(done_data, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            logger.error(f"Plan generation stream error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 async def _extract_wishes_only(
     free_text: str,
     user_profile_summary: str = "",

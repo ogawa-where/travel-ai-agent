@@ -77,6 +77,12 @@ interface ChatResponse {
   updated_signals: PreferenceSignal[]
 }
 
+// マッチタグ（色分け表示用）
+interface MatchTag {
+  text: string
+  type: 'preference' | 'wish'  // preference: 長期嗜好（紫）, wish: 今回の要望（黄）
+}
+
 // 旅行企画モード用インターフェース
 interface POI {
   name: string
@@ -89,6 +95,7 @@ interface POI {
   rating: number | null
   tags: string[]
   source_url: string
+  match_tags?: MatchTag[]  // マッチタグ（色分け表示用）
 }
 
 interface ItineraryItem {
@@ -653,6 +660,80 @@ export const api = {
     return response.json()
   },
 
+  // 構造化フォームからプラン生成（進捗ストリーミング付き）
+  async submitTravelFormStream(
+    data: TravelPlanFormData,
+    onProgress: (phase: string, percent: number) => void,
+    onDone: (response: TravelChatResponse) => void,
+    onError?: (error: string) => void,
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/travel/plan-with-form/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      onError?.(error)
+      throw new Error(error)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Response body is not readable')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6)
+            if (!jsonStr.trim()) continue
+
+            try {
+              const event = JSON.parse(jsonStr)
+              switch (event.type) {
+                case 'progress':
+                  onProgress(event.phase, event.percent)
+                  break
+                case 'done':
+                  onDone({
+                    user_id: data.user_id,
+                    session_id: event.session_id,
+                    assistant_message: event.assistant_message,
+                    plan_request_id: event.plan_request_id,
+                    plan: event.plan,
+                    status: 'completed',
+                  })
+                  break
+                case 'error':
+                  onError?.(event.message)
+                  break
+              }
+            } catch (e) {
+              console.warn('Failed to parse SSE data:', jsonStr)
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+
   // 全カテゴリ並列検索
   async searchAllCategories(request: CategorySearchRequest): Promise<AllCategorySearchResults> {
     const [activity, food, hotel] = await Promise.allSettled([
@@ -814,4 +895,4 @@ export const api = {
   },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse, POIDetail }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse, POIDetail, MatchTag }

@@ -8,6 +8,10 @@ CLAUDE.md セクション4.1の責務を実装。
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Callable, Awaitable
+
+# 進捗コールバックの型
+ProgressCallback = Callable[[str, int], Awaitable[None]]
 
 
 def _utcnow() -> datetime:
@@ -52,6 +56,7 @@ class TravelPlanningOrchestrator:
         preference_signals: list[dict] | None = None,
         pre_constraints: TravelConstraints | None = None,
         pre_wishes: TravelWishes | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> TravelPlan:
         """
         旅行企画フローを実行
@@ -63,10 +68,15 @@ class TravelPlanningOrchestrator:
             preference_signals: ユーザー嗜好シグナル
             pre_constraints: フォームから直接変換された制約（指定時はTranslatorスキップ）
             pre_wishes: フォームのfree_textから抽出された希望（任意）
+            on_progress: 進捗コールバック (phase_name, progress_percent)
 
         Returns:
             生成された旅行プラン
         """
+        # 進捗通知ヘルパー
+        async def notify_progress(phase: str, percent: int):
+            if on_progress:
+                await on_progress(phase, percent)
         preference_signals = preference_signals or []
         start_time = time.time()
 
@@ -97,6 +107,7 @@ class TravelPlanningOrchestrator:
             )
 
             # ステップ1: 要求の構造化（pre_constraintsがある場合はTranslatorスキップ）
+            await notify_progress("translate", 0)
             if pre_constraints is not None:
                 constraints = pre_constraints
                 wishes = pre_wishes or TravelWishes()
@@ -144,6 +155,7 @@ class TravelPlanningOrchestrator:
             )
 
             # ステップ2: 検索（Search Agents x3 並列実行）
+            await notify_progress("search", 16)
             search_results = await self._step_search(
                 db,
                 plan_run.id,
@@ -152,6 +164,7 @@ class TravelPlanningOrchestrator:
             )
 
             # ステップ3: 正規化・重複排除（Normalizer/Deduper）
+            await notify_progress("normalize", 33)
             normalized_pois = await self._step_normalize(
                 db,
                 plan_run.id,
@@ -167,6 +180,7 @@ class TravelPlanningOrchestrator:
             )
 
             # ステップ4: リランク（Rerank Agent）
+            await notify_progress("rerank", 50)
             ranked_pois = await self._step_rerank(
                 db,
                 plan_run.id,
@@ -199,6 +213,7 @@ class TravelPlanningOrchestrator:
             )
 
             # ステップ5: 旅程生成（Planner Agent）
+            await notify_progress("plan", 66)
             planner_result = await self._step_plan(
                 db,
                 plan_run.id,
@@ -217,6 +232,7 @@ class TravelPlanningOrchestrator:
             )
 
             # ステップ6: 説明生成（Explainer Agent）
+            await notify_progress("explain", 83)
             explainer_result = await self._step_explain(
                 db,
                 plan_run.id,
@@ -251,6 +267,9 @@ class TravelPlanningOrchestrator:
                 "rationale",
                 explainer_result.rationale,
             )
+
+            # 完了を通知
+            await notify_progress("complete", 100)
 
             # リクエストとPlanRunを完了
             request.status = "completed"

@@ -55,15 +55,6 @@ watch(() => props.plan, () => {
   fetchGeoData()
 }, { immediate: true })
 
-const scorePercentage = computed(() => Math.round(props.plan.score * 100))
-
-const scoreColor = computed(() => {
-  if (props.plan.score >= 0.8) return '#48bb78'
-  if (props.plan.score >= 0.6) return '#4299e1'
-  if (props.plan.score >= 0.4) return '#ed8936'
-  return '#f56565'
-})
-
 const daysCount = computed(() => props.plan.itinerary.days?.length || 0)
 
 const submitFeedback = () => {
@@ -146,9 +137,6 @@ const closePOIDetail = () => {
         <h3 class="plan-title">{{ plan.itinerary.title || '旅行プラン' }}</h3>
         <p class="plan-subtitle">{{ daysCount }}日間の旅程</p>
       </div>
-      <div class="plan-score" :style="{ backgroundColor: scoreColor }">
-        {{ scorePercentage }}
-      </div>
       <div class="expand-icon" :class="{ expanded: isExpanded }">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9" />
@@ -198,19 +186,6 @@ const closePOIDetail = () => {
         <div v-if="plan.rationale" class="rationale">
           <h4>このプランについて</h4>
           <p>{{ plan.rationale }}</p>
-        </div>
-
-        <div class="score-breakdown" v-if="Object.keys(plan.score_breakdown).length > 0">
-          <h4>スコア詳細</h4>
-          <div class="score-bars">
-            <div v-for="(value, key) in plan.score_breakdown" :key="key" class="score-bar-item">
-              <span class="score-label">{{ key }}</span>
-              <div class="score-bar">
-                <div class="score-fill" :style="{ width: `${value * 100}%` }"></div>
-              </div>
-              <span class="score-value">{{ Math.round(value * 100) }}</span>
-            </div>
-          </div>
         </div>
 
         <div class="feedback-section">
@@ -310,18 +285,6 @@ const closePOIDetail = () => {
   color: #718096;
 }
 
-.plan-score {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  color: white;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
 .expand-icon {
   color: #a0aec0;
   transition: transform 0.3s;
@@ -390,56 +353,6 @@ const closePOIDetail = () => {
   font-size: 0.85rem;
   color: #4a5568;
   line-height: 1.5;
-}
-
-.score-breakdown {
-  margin-top: 16px;
-}
-
-.score-breakdown h4 {
-  margin: 0 0 10px;
-  font-size: 0.85rem;
-  color: #2d3748;
-}
-
-.score-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.score-bar-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.score-label {
-  width: 80px;
-  font-size: 0.75rem;
-  color: #718096;
-}
-
-.score-bar {
-  flex: 1;
-  height: 8px;
-  background: #e2e8f0;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.score-fill {
-  height: 100%;
-  background: #4299e1;
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-
-.score-value {
-  width: 30px;
-  font-size: 0.75rem;
-  color: #4a5568;
-  text-align: right;
 }
 
 .feedback-section {

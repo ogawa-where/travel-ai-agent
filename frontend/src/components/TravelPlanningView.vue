@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, computed } from 'vue'
+import { ref, nextTick, computed, onUnmounted } from 'vue'
 import { api } from '../lib/api'
 import { getErrorMessage } from '../lib/errors'
 import type { User, TravelPlan, CollectedTravelInfo, BasicTravelInfo, RequiredInfoStatus } from '../lib/api'
@@ -36,6 +36,79 @@ const inputMessage = ref('')
 const messagesContainer = ref<HTMLElement | null>(null)
 const currentPlan = ref<TravelPlan | null>(null)
 const isComposing = ref(false)
+
+// 進捗メーター用
+const targetProgress = ref(0)  // サーバーから受け取った目標進捗
+const displayProgress = ref(0)  // 画面表示用（アニメーション）
+const currentPhase = ref('')  // 現在のフェーズ名
+let progressInterval: number | null = null
+
+// フェーズ名の日本語マッピング
+const phaseLabels: Record<string, string> = {
+  translate: '準備中',
+  search: '検索中',
+  normalize: '整理中',
+  rerank: '分析中',
+  plan: 'プラン作成中',
+  explain: '仕上げ中',
+  complete: '完了',
+}
+
+// 各フェーズの上限値（次のフェーズの手前まで）
+const phaseMaxProgress: Record<string, number> = {
+  translate: 15,   // 0 → 15
+  search: 32,      // 16 → 32
+  normalize: 49,   // 33 → 49
+  rerank: 65,      // 50 → 65
+  plan: 82,        // 66 → 82
+  explain: 99,     // 83 → 99
+  complete: 100,   // 100
+}
+
+const getPhaseLabel = (phase: string): string => {
+  return phaseLabels[phase] || phase
+}
+
+const startProgressAnimation = () => {
+  targetProgress.value = 0
+  displayProgress.value = 0
+  currentPhase.value = ''
+
+  // ゆっくり目標に近づくアニメーション
+  progressInterval = window.setInterval(() => {
+    const target = targetProgress.value
+    const current = displayProgress.value
+    const phase = currentPhase.value
+    const maxForPhase = phaseMaxProgress[phase] ?? 99
+
+    if (current < target) {
+      // 目標より低い場合：追いつく（速度は差分に応じて調整）
+      const diff = target - current
+      const speed = diff > 20 ? 3 : diff > 10 ? 1.5 : 0.5
+      displayProgress.value = Math.min(current + speed, target)
+    } else if (current < maxForPhase) {
+      // フェーズ内をゆっくり進む（フェーズの上限まで）
+      displayProgress.value = current + 0.3
+    }
+    // maxForPhaseに達したら停滞（次のフェーズを待つ）
+  }, 100)
+}
+
+const updateProgress = (phase: string, percent: number) => {
+  currentPhase.value = phase
+  targetProgress.value = percent
+}
+
+const stopProgressAnimation = () => {
+  if (progressInterval) {
+    clearInterval(progressInterval)
+    progressInterval = null
+  }
+}
+
+onUnmounted(() => {
+  stopProgressAnimation()
+})
 
 // 収集した情報
 const basicInfo = ref<BasicTravelInfo | null>(null)
@@ -216,6 +289,7 @@ const startPlanGenerationFromForm = async () => {
   phase.value = 'planning'
   isLoading.value = true
   messages.value = []
+  startProgressAnimation()
 
   try {
     // フォームデータをTravelPlanFormDataに変換
@@ -235,35 +309,58 @@ const startPlanGenerationFromForm = async () => {
       ].filter(Boolean).join('。'),
     }
 
-    const response = await api.submitTravelForm(formData)
-    sessionId.value = response.session_id
+    await api.submitTravelFormStream(
+      formData,
+      // onProgress
+      (progressPhase: string, percent: number) => {
+        updateProgress(progressPhase, percent)
+      },
+      // onDone
+      (response) => {
+        sessionId.value = response.session_id
+        stopProgressAnimation()
 
-    if (response.plan) {
-      currentPlan.value = response.plan
-      messages.value = [{
-        role: 'assistant',
-        content: response.assistant_message,
-        plan: response.plan,
-      }]
-      emit('plan-created', response.plan)
-    } else {
-      messages.value = [{
-        role: 'assistant',
-        content: response.assistant_message,
-      }]
-    }
+        if (response.plan) {
+          currentPlan.value = response.plan
+          messages.value = [{
+            role: 'assistant',
+            content: response.assistant_message,
+            plan: response.plan,
+          }]
+          emit('plan-created', response.plan)
+        } else {
+          messages.value = [{
+            role: 'assistant',
+            content: response.assistant_message,
+          }]
+        }
 
-    phase.value = 'result'
-    await scrollToBottom()
+        phase.value = 'result'
+        scrollToBottom()
+        isLoading.value = false
+      },
+      // onError
+      (error: string) => {
+        console.error('Plan generation failed:', error)
+        stopProgressAnimation()
+        messages.value = [{
+          role: 'assistant',
+          content: `プランの生成に失敗しました。\n${error}`,
+        }]
+        phase.value = 'result'
+        scrollToBottom()
+        isLoading.value = false
+      }
+    )
   } catch (error) {
     console.error('Failed to generate plan:', error)
+    stopProgressAnimation()
     messages.value = [{
       role: 'assistant',
       content: `プランの生成に失敗しました。\n${getErrorMessage(error)}`,
     }]
     phase.value = 'result'
     await scrollToBottom()
-  } finally {
     isLoading.value = false
   }
 }
@@ -274,6 +371,7 @@ const startPlanGeneration = async () => {
 
   phase.value = 'planning'
   isLoading.value = true
+  startProgressAnimation()
 
   try {
     const response = await api.startPlanGeneration(
@@ -297,10 +395,12 @@ const startPlanGeneration = async () => {
       }]
     }
 
+    stopProgressAnimation(true)
     phase.value = 'result'
     await scrollToBottom()
   } catch (error) {
     console.error('Failed to generate plan:', error)
+    stopProgressAnimation(false)
     messages.value = [{
       role: 'assistant',
       content: `プランの生成に失敗しました。\n${getErrorMessage(error)}`,
@@ -585,25 +685,16 @@ const formatCollectedInfo = computed(() => {
     <!-- Phase 4: プラン生成中 -->
     <div v-else-if="phase === 'planning'" class="planning-phase">
       <div class="planning-container">
-        <div class="planning-icon">🔍</div>
+        <div class="planning-icon">✈️</div>
         <h2>プランを作成中...</h2>
-        <p>{{ collectedInfo.area }}の観光スポット・レストラン・宿泊施設を探索しています</p>
-        <div class="planning-progress">
-          <div class="progress-item active">
-            <span class="icon">🏯</span>
-            <span>観光スポット検索中</span>
+        <p>{{ collectedInfo.area }}への旅行プランを生成しています</p>
+        <div class="progress-meter">
+          <div class="progress-bar">
+            <div class="progress-fill" :style="{ width: `${displayProgress}%` }"></div>
           </div>
-          <div class="progress-item">
-            <span class="icon">🍽️</span>
-            <span>レストラン検索中</span>
-          </div>
-          <div class="progress-item">
-            <span class="icon">🏨</span>
-            <span>宿泊施設検索中</span>
-          </div>
-          <div class="progress-item">
-            <span class="icon">📝</span>
-            <span>プラン作成中</span>
+          <div class="progress-info">
+            <span class="progress-phase">{{ getPhaseLabel(currentPhase) }}</span>
+            <span class="progress-text">{{ Math.round(displayProgress) }}%</span>
           </div>
         </div>
       </div>
@@ -1089,31 +1180,41 @@ const formatCollectedInfo = computed(() => {
   color: #718096;
 }
 
-.planning-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  max-width: 300px;
+/* 進捗メーター */
+.progress-meter {
+  max-width: 400px;
   margin: 0 auto;
 }
 
-.progress-item {
+.progress-bar {
+  height: 12px;
+  background: #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #38b2ac, #319795);
+  border-radius: 6px;
+  transition: width 0.3s ease-out;
+}
+
+.progress-info {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  background: #f7fafc;
-  border-radius: 8px;
-  color: #a0aec0;
+}
+
+.progress-phase {
   font-size: 0.9rem;
+  color: #718096;
 }
 
-.progress-item.active {
-  background: #e6fffa;
-  color: #319795;
-}
-
-.progress-item .icon {
-  font-size: 1.2rem;
+.progress-text {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #38b2ac;
 }
 </style>

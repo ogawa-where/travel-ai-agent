@@ -155,6 +155,10 @@ class POIBase(BaseModel):
     # === ソース情報 ===
     source_url: str | None = ""
 
+    # === マッチタグ（色分け表示用） ===
+    # 形式: [{"text": "温泉好き", "type": "preference"}, {"text": "きりたんぽ", "type": "wish"}]
+    match_tags: list[dict] = Field(default_factory=list)
+
     def model_post_init(self, __context) -> None:
         """None値をデフォルト値に変換"""
         if self.description is None:
@@ -188,7 +192,8 @@ class POIRanked(POIBase):
     relevance_score: float = 0.0
     preference_score: float = 0.0  # 嗜好との適合度
     final_score: float = 0.0  # 最終スコア
-    match_reasons: list[str] = Field(default_factory=list)  # マッチ理由
+    # マッチ理由（タイプ付き）: [{"text": "温泉", "type": "preference"}, {"text": "きりたんぽ", "type": "wish"}]
+    match_reasons: list[dict] = Field(default_factory=list)
 
 
 # =============================================================================

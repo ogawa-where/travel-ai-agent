@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import WorkerStatus from './WorkerStatus.vue'
-
 defineProps<{
   profileSummary: string
   username: string
@@ -20,7 +18,6 @@ const emit = defineEmits<{
         <p>あなたの旅をサポート</p>
       </div>
       <div class="header-actions">
-        <WorkerStatus />
         <button
           class="profile-btn"
           @click="emit('showProfile')"
