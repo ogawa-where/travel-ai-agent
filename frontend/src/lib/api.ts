@@ -312,6 +312,27 @@ interface GeoEnrichedItinerary {
   days: GeoEnrichedDay[]
 }
 
+// POI詳細情報
+interface POIDetail {
+  name: string
+  category: string
+  description: string | null
+  location: string | null
+  address: string | null
+  rating: number | null
+  review_count: number | null
+  price_level: number | null
+  price_range: string | null
+  budget_per_person: number | null
+  hours: Record<string, string> | null
+  duration_minutes: number | null
+  features: string[]
+  tags: string[]
+  experiences: string[]
+  source_url: string | null
+  source_name: string | null
+}
+
 export const api = {
   async healthCheck(): Promise<HealthResponse> {
     const response = await fetchWithErrorHandling(`${API_BASE_URL}/health`)
@@ -776,6 +797,21 @@ export const api = {
     })
     return response.json()
   },
+
+  // POI詳細取得
+  async getPOIDetail(
+    poiName: string,
+    destination?: string,
+    category?: string,
+  ): Promise<POIDetail> {
+    const params = new URLSearchParams()
+    if (destination) params.append('destination', destination)
+    if (category) params.append('category', category)
+    const queryString = params.toString()
+    const url = `${API_BASE_URL}/api/travel/poi/${encodeURIComponent(poiName)}${queryString ? `?${queryString}` : ''}`
+    const response = await fetchWithErrorHandling(url)
+    return response.json()
+  },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse, POIDetail }

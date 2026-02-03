@@ -21,6 +21,7 @@ from app.schemas.travel_planning import (
     GatheringChatRequest,
     PlanGenerationRequest,
     POICategory,
+    POIDetailResponse,
     POIFeedbackRequest,
     POIFeedbackResponse,
     POIFeedbackType,
@@ -47,6 +48,7 @@ from app.agents.search_agents import (
 from app.agents.translator import translator_agent
 from app.services.experience_extractor import experience_extractor
 from app.services.long_term_memory import long_term_memory
+from app.services.poi_repository import poi_repository
 from app.services.session_manager import session_manager
 
 logger = logging.getLogger(__name__)
@@ -1221,4 +1223,59 @@ async def search_hotels(
         total_count=len(result.items),
         search_time_ms=result.search_time_ms,
         source=result.source,
+    )
+
+
+# =============================================================================
+# POI詳細取得エンドポイント
+# =============================================================================
+
+
+@router.get("/poi/{poi_name}", response_model=POIDetailResponse)
+async def get_poi_detail(
+    poi_name: str,
+    destination: str | None = None,
+    category: str | None = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+) -> POIDetailResponse:
+    """
+    POI詳細を取得
+
+    POI名で検索し、DBに保存されている詳細情報を返します。
+    スコア情報は含みません（表示用）。
+
+    Args:
+        poi_name: POI名
+        destination: 目的地（絞り込み用、任意）
+        category: カテゴリ（絞り込み用、任意）
+
+    Returns:
+        POI詳細情報
+    """
+    poi = await poi_repository.get_poi_by_name(
+        db, poi_name, destination=destination, category=category
+    )
+
+    if not poi:
+        raise HTTPException(status_code=404, detail="POI not found")
+
+    # POICacheからPOIDetailResponseに変換
+    return POIDetailResponse(
+        name=poi.name,
+        category=poi.category,
+        description=poi.description or "",
+        location=poi.location or "",
+        address=poi.address or "",
+        rating=poi.rating,
+        review_count=poi.review_count,
+        price_level=poi.price_level,
+        price_range=poi.price_range or "",
+        budget_per_person=poi.budget_per_person,
+        hours=poi.hours,
+        duration_minutes=poi.duration_minutes,
+        features=poi.features or [],
+        tags=poi.tags or [],
+        experiences=poi.experiences or [],
+        source_url=poi.source_url or "",
+        source_name=poi.source_name or "",
     )

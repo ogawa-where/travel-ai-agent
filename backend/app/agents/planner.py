@@ -33,7 +33,8 @@ SYSTEM_PROMPT = """あなたは旅行計画の専門家です。
 2. 移動時間を考慮し、無理のないスケジュールにする
 3. 1日の活動は朝から夜まで、適度な休憩を入れる
 4. 食事（朝・昼・夜）を適切に配置する
-5. 宿泊先は毎晩必要
+5. 宿泊先は最終日以外の各日に必要（N日間の旅行 = N-1泊）
+   例: 2日間 → 1泊（1日目のみ宿泊）、3日間 → 2泊（1日目と2日目に宿泊）
 6. days配列の要素数は指定された日数と完全一致させること
 
 出力は以下のJSON形式で返してください：
@@ -389,10 +390,14 @@ class PlannerAgent:
         completeness = min(total_items / max(expected_items, 1), 1.0)
         scores["completeness"] = completeness
 
-        # 2. 宿泊カバー率
+        # 2. 宿泊カバー率（最終日は宿泊不要: N日間 = N-1泊）
         days_with_accommodation = sum(1 for day in itinerary.days if day.accommodation)
-        accommodation_coverage = days_with_accommodation / max(len(itinerary.days), 1)
-        scores["accommodation"] = accommodation_coverage
+        expected_nights = max(len(itinerary.days) - 1, 0)
+        if expected_nights > 0:
+            accommodation_coverage = days_with_accommodation / expected_nights
+        else:
+            accommodation_coverage = 1.0  # 1日旅行は宿泊不要
+        scores["accommodation"] = min(accommodation_coverage, 1.0)
 
         # 3. 食事カバー率（1日3食目安）
         food_items = sum(

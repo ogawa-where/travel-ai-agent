@@ -9,7 +9,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'poi-feedback': [poiName: string, category: POICategory, feedbackType: POIFeedbackType, tags: string[]]
+  'poi-click': [poiName: string, category: POICategory]
 }>()
+
+const handlePOIClick = (poiName: string, category: string) => {
+  emit('poi-click', poiName, category as POICategory)
+}
 
 const formatTime = (start: string, end: string): string => {
   if (!start && !end) return ''
@@ -93,7 +98,9 @@ const handleFeedback = (poiName: string, category: string, feedbackType: POIFeed
               <div class="item-main">
                 <div class="item-header">
                   <span class="item-icon">{{ getCategoryIcon(item.poi.category) }}</span>
-                  <span class="item-name">{{ item.poi.name }}</span>
+                  <span class="item-name clickable" @click="handlePOIClick(item.poi.name, item.poi.category)">
+                    {{ item.poi.name }}
+                  </span>
                   <span class="item-category">{{ getCategoryLabel(item.poi.category) }}</span>
 
                   <!-- Feedback buttons -->
@@ -165,7 +172,9 @@ const handleFeedback = (poiName: string, category: string, feedbackType: POIFeed
             </div>
           </div>
           <div class="accommodation-content">
-            <span class="accommodation-name">{{ day.accommodation.name }}</span>
+            <span class="accommodation-name clickable" @click="handlePOIClick(day.accommodation.name, 'hotel')">
+              {{ day.accommodation.name }}
+            </span>
             <span v-if="day.accommodation.price_range" class="accommodation-price">
               {{ day.accommodation.price_range }}
             </span>
@@ -340,6 +349,21 @@ const handleFeedback = (poiName: string, category: string, feedbackType: POIFeed
   font-weight: 500;
   font-size: 0.9rem;
   color: #2c3e50;
+}
+
+.item-name.clickable,
+.accommodation-name.clickable {
+  cursor: pointer;
+  color: #2980b9;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.item-name.clickable:hover,
+.accommodation-name.clickable:hover {
+  color: #1a5276;
+  text-decoration-style: solid;
 }
 
 .item-category {

@@ -691,3 +691,50 @@ class TravelPlanFormRequest(BaseModel):
         if self.free_text:
             parts.append(self.free_text)
         return "。".join(parts)
+
+
+# =============================================================================
+# POI詳細表示
+# =============================================================================
+
+
+class POIDetailResponse(BaseModel):
+    """POI詳細レスポンス（DBから取得した情報）
+
+    スコア情報は含まない（フロントエンドでの詳細表示用）
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # 基本情報
+    name: str
+    category: str
+    description: str | None = ""
+
+    # 位置情報
+    location: str | None = ""
+    address: str | None = ""
+
+    # 評価・レビュー情報
+    rating: float | None = None
+    review_count: int | None = None
+
+    # 価格情報
+    price_level: int | None = None
+    price_range: str | None = ""
+    budget_per_person: int | None = None
+
+    # 時間情報
+    hours: dict | None = None
+    duration_minutes: int | None = None
+
+    # 特徴・タグ
+    features: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+    # 体験情報（Experience Extractorで抽出されたもの）
+    experiences: list[str] = Field(default_factory=list)
+
+    # ソース情報
+    source_url: str | None = ""
+    source_name: str | None = ""

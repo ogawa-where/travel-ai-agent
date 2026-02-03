@@ -13,10 +13,10 @@
       "description": "qilin - Light tasks (Translator, Summarizer, PreferenceLearner) + Food search"
     },
     {
-      "host": "172.28.208.218:11434",
+      "host": "172.28.208.207:11434",
       "role": "embed",
       "max_concurrent": 10,
-      "description": "ranco - Embedding tasks (Reranker) + Hotel search"
+      "description": "gouin - Embedding tasks (Reranker) + Hotel search"
     },
     {
       "host": "172.28.208.213:11434",
@@ -46,7 +46,7 @@
       "model": "qwen2.5:32b-instruct"
     },
     "hotel": {
-      "host": "172.28.208.218:11434",
+      "host": "172.28.208.207:11434",
       "model": "qwen2.5:32b-instruct"
     },
     "transportation": {

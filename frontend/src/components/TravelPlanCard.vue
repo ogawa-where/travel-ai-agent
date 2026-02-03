@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch } from 'vue'
-import type { TravelPlan, POIFeedbackType, POICategory, GeoEnrichedItinerary } from '../lib/api'
+import type { TravelPlan, POIFeedbackType, POICategory, GeoEnrichedItinerary, POIDetail } from '../lib/api'
 import { api } from '../lib/api'
 import ItineraryDisplay from './ItineraryDisplay.vue'
 import ItineraryMap from './ItineraryMap.vue'
 import MapModal from './MapModal.vue'
+import POIDetailModal from './POIDetailModal.vue'
 
 const props = defineProps<{
   plan: TravelPlan
@@ -28,6 +29,12 @@ const geoData = ref<GeoEnrichedItinerary | null>(null)
 const geoLoading = ref(false)
 const geoError = ref(false)
 const showMapModal = ref(false)
+
+// POI Detail modal state
+const showPOIDetail = ref(false)
+const poiDetail = ref<POIDetail | null>(null)
+const poiDetailLoading = ref(false)
+const poiDetailError = ref<string | null>(null)
 
 // Fetch geo data when plan becomes available
 const fetchGeoData = async () => {
@@ -99,6 +106,31 @@ const handlePOIFeedback = async (
     delete poiFeedback[poiName]
   }
 }
+
+// Handle POI click to show detail modal
+const handlePOIClick = async (poiName: string, category: POICategory) => {
+  showPOIDetail.value = true
+  poiDetailLoading.value = true
+  poiDetailError.value = null
+  poiDetail.value = null
+
+  try {
+    // Get destination from plan
+    const destination = props.plan.itinerary.days?.[0]?.items?.[0]?.poi?.location || ''
+    poiDetail.value = await api.getPOIDetail(poiName, destination, category)
+  } catch (error) {
+    console.error('Failed to fetch POI detail:', error)
+    poiDetailError.value = 'POI情報の取得に失敗しました'
+  } finally {
+    poiDetailLoading.value = false
+  }
+}
+
+const closePOIDetail = () => {
+  showPOIDetail.value = false
+  poiDetail.value = null
+  poiDetailError.value = null
+}
 </script>
 
 <template>
@@ -144,6 +176,7 @@ const handlePOIFeedback = async (
           :feedback-enabled="!!userId"
           :poi-feedback="poiFeedback"
           @poi-feedback="handlePOIFeedback"
+          @poi-click="handlePOIClick"
         />
 
         <!-- Map section -->
@@ -213,6 +246,15 @@ const handlePOIFeedback = async (
       :geo-data="geoData"
       :visible="showMapModal"
       @close="showMapModal = false"
+    />
+
+    <!-- POI Detail modal -->
+    <POIDetailModal
+      :visible="showPOIDetail"
+      :poi="poiDetail"
+      :loading="poiDetailLoading"
+      :error="poiDetailError"
+      @close="closePOIDetail"
     />
   </div>
 </template>

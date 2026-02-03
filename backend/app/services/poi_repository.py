@@ -242,5 +242,35 @@ class POIRepository:
         await db.flush()
 
 
+    async def get_poi_by_name(
+        self,
+        db: AsyncSession,
+        name: str,
+        destination: str | None = None,
+        category: str | None = None,
+    ) -> POICache | None:
+        """
+        POI名で検索
+
+        Args:
+            db: データベースセッション
+            name: POI名
+            destination: 目的地（絞り込み用、任意）
+            category: カテゴリ（絞り込み用、任意）
+
+        Returns:
+            POICache または None
+        """
+        query = select(POICache).where(POICache.name == name)
+
+        if destination:
+            query = query.where(POICache.destination == destination)
+        if category:
+            query = query.where(POICache.category == category)
+
+        result = await db.execute(query.limit(1))
+        return result.scalar_one_or_none()
+
+
 # シングルトンインスタンス
 poi_repository = POIRepository()
