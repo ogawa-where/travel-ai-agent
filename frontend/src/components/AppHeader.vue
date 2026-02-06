@@ -14,8 +14,8 @@ const emit = defineEmits<{
   <header class="header">
     <div class="header-content">
       <div class="header-brand">
-        <h1>Travel AI</h1>
-        <p>あなたの旅をサポート</p>
+        <h1>Travel AI Agent</h1>
+        <p>Your Journey, Personalized</p>
       </div>
       <div class="header-actions">
         <button
@@ -24,7 +24,7 @@ const emit = defineEmits<{
           title="プロフィールを見る"
           :class="{ 'has-profile': profileSummary }"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
           </svg>
@@ -32,6 +32,11 @@ const emit = defineEmits<{
         </button>
         <span v-if="username" class="username">{{ username }}</span>
         <button class="logout-btn" @click="emit('logout')" title="ログアウト">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
           ログアウト
         </button>
       </div>
@@ -40,11 +45,15 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Montserrat:wght@300;400;500;600&display=swap');
+
 .header {
-  background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
-  color: white;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
   padding: 1rem 2rem;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
 }
 
 .header-content {
@@ -57,15 +66,21 @@ const emit = defineEmits<{
 
 .header-brand h1 {
   margin: 0;
+  font-family: 'Playfair Display', serif;
   font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-weight: 600;
+  color: #1a202c;
+  letter-spacing: 0.5px;
 }
 
 .header-brand p {
-  margin: 0.25rem 0 0;
-  opacity: 0.8;
-  font-size: 0.85rem;
+  margin: 0.2rem 0 0;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #4a5568;
+  letter-spacing: 2px;
+  text-transform: uppercase;
 }
 
 .header-actions {
@@ -78,52 +93,95 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  background: transparent;
-  color: white;
-  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  color: #4a5568;
+  border-radius: 10px;
   cursor: pointer;
+  font-family: 'Montserrat', sans-serif;
   font-size: 0.85rem;
-  transition: all 0.2s;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
 .profile-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.8);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .profile-btn.has-profile {
-  background: rgba(72, 187, 120, 0.2);
-  border-color: rgba(72, 187, 120, 0.5);
+  background: rgba(72, 187, 120, 0.15);
+  border-color: rgba(72, 187, 120, 0.4);
+  color: #276749;
 }
 
 .profile-btn.has-profile:hover {
-  background: rgba(72, 187, 120, 0.3);
+  background: rgba(72, 187, 120, 0.25);
 }
 
 .username {
-  padding: 0.4rem 0.75rem;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
+  padding: 0.5rem 0.85rem;
+  background: rgba(102, 126, 234, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  border-radius: 8px;
+  font-family: 'Montserrat', sans-serif;
   font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+  color: #4a5568;
 }
 
 .logout-btn {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: transparent;
-  color: rgba(255, 255, 255, 0.7);
-  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.85rem;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: #718096;
+  border-radius: 8px;
   cursor: pointer;
+  font-family: 'Montserrat', sans-serif;
   font-size: 0.8rem;
-  transition: all 0.2s;
+  font-weight: 500;
+  transition: all 0.3s ease;
 }
 
 .logout-btn:hover {
-  background: rgba(231, 76, 60, 0.8);
-  border-color: rgba(231, 76, 60, 0.8);
-  color: white;
+  background: rgba(231, 76, 60, 0.1);
+  border-color: rgba(231, 76, 60, 0.3);
+  color: #c53030;
+}
+
+.logout-btn svg {
+  opacity: 0.7;
+}
+
+.logout-btn:hover svg {
+  opacity: 1;
+}
+
+@media (max-width: 600px) {
+  .header {
+    padding: 0.75rem 1rem;
+  }
+
+  .header-brand h1 {
+    font-size: 1.2rem;
+  }
+
+  .header-brand p {
+    font-size: 0.65rem;
+  }
+
+  .profile-btn span {
+    display: none;
+  }
+
+  .username {
+    display: none;
+  }
 }
 </style>

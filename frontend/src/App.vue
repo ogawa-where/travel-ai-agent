@@ -5,7 +5,7 @@ import { storage } from './lib/storage'
 import type { User, UserProfile, PreferenceSignal, LoginResponse } from './lib/api'
 import AppHeader from './components/AppHeader.vue'
 import LoginScreen from './components/LoginScreen.vue'
-import ModeTabs, { type TabMode } from './components/ModeTabs.vue'
+import ModeSelectScreen, { type SelectableMode } from './components/ModeSelectScreen.vue'
 import PreferenceLearningView from './components/PreferenceLearningView.vue'
 import TravelPlanningView from './components/TravelPlanningView.vue'
 import PreferenceToast from './components/PreferenceToast.vue'
@@ -17,7 +17,23 @@ const isLoggedIn = ref(false)
 const userProfile = ref<UserProfile | null>(null)
 const preferenceSignals = ref<PreferenceSignal[]>([])
 const showProfileModal = ref(false)
-const activeMode = ref<TabMode>('preference')
+type ActiveMode = 'select' | SelectableMode
+const activeMode = ref<ActiveMode>('select')
+
+// ランダム背景画像
+const backgroundImages = [
+  '/backgrounds/mountain.png',
+  '/backgrounds/mountain_and_river.png',
+  '/backgrounds/ocean.png',
+  '/backgrounds/ocean_and_mock.png',
+  '/backgrounds/sun.png',
+]
+const currentBackground = ref('')
+
+const selectRandomBackground = () => {
+  const randomIndex = Math.floor(Math.random() * backgroundImages.length)
+  currentBackground.value = backgroundImages[randomIndex]
+}
 
 // Toast notifications for learned preferences
 const pendingToasts = ref<{category: string; tag: string; weight: number; is_new: boolean}[]>([])
@@ -99,14 +115,23 @@ const resetApp = () => {
   userProfile.value = null
   preferenceSignals.value = []
   isLoggedIn.value = false
+  activeMode.value = 'select'
 }
 
 const logout = () => {
   resetApp()
 }
 
-const handleModeChange = (mode: TabMode) => {
+const handleModeSelect = (mode: SelectableMode) => {
   activeMode.value = mode
+}
+
+const handleBackToSelect = () => {
+  activeMode.value = 'select'
+}
+
+const handleGoToPlanning = () => {
+  activeMode.value = 'planning'
 }
 
 const handlePreferencesUpdated = async (newSignals: PreferenceSignal[]) => {
@@ -145,6 +170,7 @@ const closeProfile = () => {
 }
 
 onMounted(() => {
+  selectRandomBackground()
   initializeApp()
 })
 </script>
@@ -156,35 +182,50 @@ onMounted(() => {
 
     <!-- Main App -->
     <template v-else-if="isLoggedIn">
-      <AppHeader
-        :profile-summary="userProfile?.summary || ''"
-        :username="user?.username || ''"
-        @show-profile="showProfile"
-        @logout="logout"
-      />
+      <!-- 背景画像 -->
+      <div
+        class="app-background"
+        :style="{ backgroundImage: `url(${currentBackground})` }"
+      ></div>
+      <div class="app-background-overlay"></div>
 
-      <main class="main">
-        <div class="content-wrapper">
-          <!-- Mode Tabs -->
-          <ModeTabs :active-mode="activeMode" @change="handleModeChange" />
+      <div class="app-content">
+        <AppHeader
+          :profile-summary="userProfile?.summary || ''"
+          :username="user?.username || ''"
+          @show-profile="showProfile"
+          @logout="logout"
+        />
 
-          <!-- Mode Views -->
-          <div class="view-container">
-            <PreferenceLearningView
-              v-if="activeMode === 'preference'"
-              :user="user"
-              @preferences-updated="handlePreferencesUpdated"
+        <main class="main">
+          <div class="content-wrapper">
+            <!-- Mode Select Screen -->
+            <ModeSelectScreen
+              v-if="activeMode === 'select'"
+              @select="handleModeSelect"
             />
-            <TravelPlanningView
-              v-else-if="activeMode === 'planning'"
-              :user="user"
-            />
+
+            <!-- Mode Views -->
+            <div v-else class="view-container">
+              <PreferenceLearningView
+                v-if="activeMode === 'preference'"
+                :user="user"
+                @preferences-updated="handlePreferencesUpdated"
+                @back-to-select="handleBackToSelect"
+                @go-to-planning="handleGoToPlanning"
+              />
+              <TravelPlanningView
+                v-else-if="activeMode === 'planning'"
+                :user="user"
+                @back-to-select="handleBackToSelect"
+              />
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
 
-      <!-- Toast notifications for learned preferences -->
-      <PreferenceToast :preferences="pendingToasts" @clear="clearToasts" />
+        <!-- Toast notifications for learned preferences -->
+        <PreferenceToast :preferences="pendingToasts" @clear="clearToasts" />
+      </div>
 
       <!-- Profile Modal -->
       <Teleport to="body">
@@ -242,28 +283,77 @@ onMounted(() => {
 </template>
 
 <style scoped>
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600&display=swap');
+
 .app {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #f5f7fa;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 背景画像 */
+.app-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  z-index: 0;
+  transition: background-image 0.5s ease;
+}
+
+/* 背景オーバーレイ（薄いガラス効果） */
+.app-background-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.05) 100%
+  );
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  z-index: 1;
+}
+
+/* メインコンテンツ */
+.app-content {
+  position: relative;
+  z-index: 2;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .main {
   flex: 1;
   display: flex;
   justify-content: center;
-  padding: 1rem;
+  padding: 1.5rem 2rem;
 }
 
 .content-wrapper {
   width: 100%;
-  max-width: 800px;
+  max-width: 1400px;
   display: flex;
   flex-direction: column;
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 28px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    0 2px 8px rgba(0, 0, 0, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
   overflow: hidden;
 }
 
@@ -271,8 +361,8 @@ onMounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 500px;
-  max-height: calc(100vh - 200px);
+  min-height: 600px;
+  max-height: calc(100vh - 160px);
 }
 
 .spinner {
@@ -294,7 +384,9 @@ onMounted(() => {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -302,41 +394,55 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: white;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 20px;
   width: 90%;
   max-width: 500px;
   max-height: 80vh;
   overflow: hidden;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  box-shadow:
+    0 25px 50px rgba(0, 0, 0, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 1.25rem 1.5rem;
+  background: rgba(255, 255, 255, 0.5);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 
 .modal-header h2 {
   margin: 0;
-  font-size: 1.25rem;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 1.2rem;
+  font-weight: 600;
   color: #2d3748;
 }
 
 .close-btn {
-  background: none;
+  background: rgba(0, 0, 0, 0.05);
   border: none;
-  font-size: 1.5rem;
-  color: #a0aec0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 1.25rem;
+  color: #718096;
   cursor: pointer;
-  padding: 0;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
 }
 
 .close-btn:hover {
-  color: #718096;
+  background: rgba(0, 0, 0, 0.1);
+  color: #4a5568;
 }
 
 .modal-body {
@@ -436,27 +542,33 @@ onMounted(() => {
 }
 
 .initializing-screen {
+  position: fixed;
+  inset: 0;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  gap: 1.5rem;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.9) 0%, rgba(118, 75, 162, 0.9) 100%);
   color: white;
+  z-index: 100;
 }
 
 .initializing-screen .spinner {
   width: 50px;
   height: 50px;
-  border: 3px solid rgba(255, 255, 255, 0.3);
+  border: 3px solid rgba(255, 255, 255, 0.2);
   border-top-color: white;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
 
 .initializing-screen p {
+  font-family: 'Montserrat', sans-serif;
   font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: 2px;
   opacity: 0.9;
 }
 </style>
