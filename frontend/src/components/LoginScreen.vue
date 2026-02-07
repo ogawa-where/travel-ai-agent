@@ -19,16 +19,15 @@ const showSubtitle = ref(false)
 
 // 飛行機雲アニメーション
 const titleEl = ref<HTMLElement | null>(null)
-const planeEl = ref<SVGSVGElement | null>(null)
-const trailCanvasEl = ref<HTMLCanvasElement | null>(null)
+const planeEl = ref<HTMLElement | null>(null)
+const exhaustCanvasEl = ref<HTMLCanvasElement | null>(null)
 
 const animateContrail = async () => {
   const title = titleEl.value
   const plane = planeEl.value
-  const visCanvas = trailCanvasEl.value
-  if (!title || !plane || !visCanvas) return
+  const canvas = exhaustCanvasEl.value
+  if (!title || !plane || !canvas) return
 
-  const text = 'Travel AI Agent'
   await document.fonts.load('700 128px "Dancing Script"')
   await nextTick()
 
@@ -36,177 +35,173 @@ const animateContrail = async () => {
   const w = title.offsetWidth
   const h = title.offsetHeight
 
-  const makeCtx = (c: HTMLCanvasElement) => {
-    c.width = w * dpr; c.height = h * dpr
-    const cx = c.getContext('2d')!
-    cx.scale(dpr, dpr)
-    return cx
-  }
+  // 飛行機サイズ: テキスト高さに合わせる
+  const PH = h * 0.85
+  const PW = PH * 3.2
 
-  visCanvas.style.width = `${w}px`
-  visCanvas.style.height = `${h}px`
-  const ctx = makeCtx(visCanvas)
+  // キャンバス: テキスト幅 + 飛行機の余白
+  const cW = w + PW
+  const cH = h * 2.2
+  const cOffX = -PW * 0.3
+  const cOffY = -(cH - h) / 2
 
-  // テキスト描画（オフスクリーン）
-  const textC = document.createElement('canvas')
-  const tCtx = makeCtx(textC)
-  const cs = getComputedStyle(title)
-  tCtx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
-  tCtx.fillStyle = 'white'
-  tCtx.textAlign = 'center'
-  tCtx.textBaseline = 'alphabetic'
-  const met = tCtx.measureText(text)
-  const tx = w / 2
-  const ty = (h + met.actualBoundingBoxAscent - met.actualBoundingBoxDescent) / 2
-  tCtx.shadowColor = 'rgba(0,0,0,0.3)'
-  tCtx.shadowOffsetY = 4
-  tCtx.shadowBlur = 25
-  tCtx.fillText(text, tx, ty)
-
-  // コントレイルマスク（オフスクリーン）
-  const maskC = document.createElement('canvas')
-  const mCtx = makeCtx(maskC)
+  canvas.width = cW * dpr
+  canvas.height = cH * dpr
+  canvas.style.width = `${cW}px`
+  canvas.style.height = `${cH}px`
+  canvas.style.left = `${cOffX}px`
+  canvas.style.top = `${cOffY}px`
+  const ctx = canvas.getContext('2d')!
+  ctx.scale(dpr, dpr)
 
   title.style.opacity = '0'
 
-  // 飛行経路（ゆるやかな波形で左から右へ）
-  const getFlightPos = (t: number) => ({
-    x: -0.06 + t * 1.12,
-    y: 0.48 + 0.07 * Math.sin(t * Math.PI * 2),
+  // 飛行経路
+  const flightPos = (t: number) => ({
+    x: -PW * 0.5 + t * (w + PW),
+    y: h / 2 + h * 0.05 * Math.sin(t * Math.PI * 1.5),
   })
 
-  // 雲パーティクル
-  type CloudPt = { x: number; y: number; r: number; alpha: number; vy: number }
-  const clouds: CloudPt[] = []
+  // 排気パーティクル
+  type Smoke = { x: number; y: number; r: number; a: number; vx: number; vy: number; mr: number }
+  const smokes: Smoke[] = []
 
-  // 飛行機サイズ（CSS px）
-  const PLANE_W = 52, PLANE_H = 22
-
-  // アニメーション定数
-  const ENTRANCE_MS = 600
-  const FLIGHT_MS = 7000
-  const startTime = performance.now()
-  let prevX = -PLANE_W
+  const ENT_MS = 700
+  const FLY_MS = 5500
+  const t0 = performance.now()
+  let flyDone = false
+  let exitDone = false
+  let textShowing = false
 
   plane.style.opacity = '0'
   plane.style.transition = 'none'
+  plane.style.width = `${PW}px`
+  plane.style.height = `${PH}px`
 
-  const step = (now: number) => {
-    const elapsed = now - startTime
+  const frame = (now: number) => {
+    const el = now - t0
 
     // === フェーズ1: 飛行機が左から登場 ===
-    if (elapsed < ENTRANCE_MS) {
-      const t = elapsed / ENTRANCE_MS
-      const eased = t * t * (3 - 2 * t)
-      const pos = getFlightPos(0)
-      const sx = -PLANE_W - 40
-      const ex = pos.x * w
-      const px = sx + (ex - sx) * eased
-      const py = pos.y * h
-      plane.style.transform = `translate(${px - PLANE_W / 2}px, ${py - PLANE_H / 2}px)`
-      plane.style.opacity = `${Math.min(1, t * 3)}`
-      prevX = px
-      requestAnimationFrame(step)
+    if (el < ENT_MS) {
+      const t = el / ENT_MS
+      const e = t * t * (3 - 2 * t)
+      const p0 = flightPos(0)
+      const sx = -PW - 60
+      const px = sx + (p0.x - sx) * e
+      plane.style.transform = `translate(${px - PW / 2}px,${p0.y - PH / 2}px)`
+      plane.style.opacity = `${Math.min(1, t * 2.5)}`
+      requestAnimationFrame(frame)
       return
     }
 
-    // === フェーズ2: 飛行（コントレイルでテキストを描く）===
-    const fe = elapsed - ENTRANCE_MS
-    const rawT = Math.min(fe / FLIGHT_MS, 1)
-    // 加速→等速→減速
-    const easedT = rawT < 0.12
-      ? (rawT / 0.12) ** 2 * 0.12
-      : rawT > 0.88
-        ? 0.88 + (1 - (1 - (rawT - 0.88) / 0.12) ** 2) * 0.12
-        : rawT
+    // === フェーズ2: 飛行（排気ガスを出しながら）===
+    const ft = Math.min((el - ENT_MS) / FLY_MS, 1)
+    const et = ft < 0.1 ? (ft / 0.1) ** 2 * 0.1
+      : ft > 0.9 ? 0.9 + (1 - (1 - (ft - 0.9) / 0.1) ** 2) * 0.1 : ft
 
-    const pos = getFlightPos(easedT)
-    const px = pos.x * w
-    const py = pos.y * h
+    const pos = flightPos(et)
+    const px = pos.x, py = pos.y
 
-    // コントレイルマスク描画（テキスト高さ全体をカバーする放射グラデーション）
-    const trailR = h * 0.85
-    const grad = mCtx.createRadialGradient(px, h / 2, 0, px, h / 2, trailR)
-    grad.addColorStop(0, 'rgba(255,255,255,1)')
-    grad.addColorStop(0.35, 'rgba(255,255,255,0.95)')
-    grad.addColorStop(0.65, 'rgba(255,255,255,0.5)')
-    grad.addColorStop(1, 'rgba(255,255,255,0)')
-    mCtx.fillStyle = grad
-    mCtx.beginPath()
-    mCtx.arc(px, h / 2, trailR, 0, Math.PI * 2)
-    mCtx.fill()
+    // 排気口位置（機体後方 → キャンバス座標系）
+    const exX = px - PW * 0.35 - cOffX
+    const exY = py - cOffY
 
-    // ツインコントレイル（2本の飛行機雲ライン）
-    const gap = 4
-    for (const oy of [-gap, gap]) {
-      mCtx.strokeStyle = 'rgba(255,255,255,0.6)'
-      mCtx.lineWidth = 2.5
-      mCtx.lineCap = 'round'
-      mCtx.beginPath()
-      mCtx.moveTo(prevX, py + oy)
-      mCtx.lineTo(px, py + oy)
-      mCtx.stroke()
-    }
-
-    // 雲パーティクル生成（飛行機の後方に散布）
-    if (rawT > 0.01 && rawT < 0.99) {
-      for (let i = 0; i < 3; i++) {
-        clouds.push({
-          x: px - 14 - Math.random() * 10,
-          y: py + (Math.random() - 0.5) * 14,
-          r: 2 + Math.random() * 4,
-          alpha: 0.25 + Math.random() * 0.25,
-          vy: (Math.random() - 0.5) * 0.3,
+    // 排気パーティクル生成
+    if (ft > 0.01 && ft < 0.98) {
+      for (let i = 0; i < 6; i++) {
+        smokes.push({
+          x: exX + (Math.random() - 0.5) * 14,
+          y: exY + (Math.random() - 0.5) * PH * 0.3,
+          r: 3 + Math.random() * 5, a: 0.55 + Math.random() * 0.35,
+          vx: -1.0 - Math.random() * 1.5, vy: (Math.random() - 0.5) * 0.7,
+          mr: 20 + Math.random() * 35,
+        })
+      }
+      for (let i = 0; i < 4; i++) {
+        smokes.push({
+          x: exX + (Math.random() - 0.5) * 8,
+          y: exY + (Math.random() - 0.5) * PH * 0.5,
+          r: 1.5 + Math.random() * 2.5, a: 0.3 + Math.random() * 0.2,
+          vx: -0.4 - Math.random() * 0.8, vy: (Math.random() - 0.5) * 1.0,
+          mr: 10 + Math.random() * 18,
         })
       }
     }
 
     // パーティクル更新＆描画
-    for (let i = clouds.length - 1; i >= 0; i--) {
-      const c = clouds[i]
-      c.y += c.vy
-      c.r += 0.04
-      c.alpha -= 0.004
-      if (c.alpha <= 0) { clouds.splice(i, 1); continue }
-      mCtx.globalAlpha = c.alpha
-      mCtx.fillStyle = 'white'
-      mCtx.beginPath()
-      mCtx.arc(c.x, c.y, c.r, 0, Math.PI * 2)
-      mCtx.fill()
+    ctx.clearRect(0, 0, cW, cH)
+    for (let i = smokes.length - 1; i >= 0; i--) {
+      const s = smokes[i]
+      s.x += s.vx; s.y += s.vy; s.vy *= 0.995
+      if (s.r < s.mr) s.r += (s.mr - s.r) * 0.025
+      s.a -= flyDone ? 0.007 : 0.0015
+      if (s.a <= 0) { smokes.splice(i, 1); continue }
+      ctx.globalAlpha = s.a
+      const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r)
+      g.addColorStop(0, 'rgba(255,255,255,0.9)')
+      g.addColorStop(0.45, 'rgba(255,255,255,0.5)')
+      g.addColorStop(1, 'rgba(255,255,255,0)')
+      ctx.fillStyle = g
+      ctx.beginPath()
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+      ctx.fill()
     }
-    mCtx.globalAlpha = 1
-    prevX = px
+    ctx.globalAlpha = 1
 
-    // 合成: テキスト × コントレイルマスク
-    ctx.clearRect(0, 0, w, h)
-    ctx.drawImage(textC, 0, 0, w, h)
-    ctx.globalCompositeOperation = 'destination-in'
-    ctx.drawImage(maskC, 0, 0, w, h)
-    ctx.globalCompositeOperation = 'source-over'
+    // 飛行機の位置と角度
+    if (!exitDone) {
+      const np = flightPos(Math.min(et + 0.005, 1))
+      const ang = Math.atan2(np.y - pos.y, np.x - pos.x) * 180 / Math.PI
+      plane.style.transform = `translate(${px - PW / 2}px,${py - PH / 2}px) rotate(${ang}deg)`
+      plane.style.opacity = '1'
+    }
 
-    // 飛行機の位置と飛行角度
-    const np = getFlightPos(Math.min(easedT + 0.005, 1))
-    const angle = Math.atan2((np.y - pos.y) * h, (np.x - pos.x) * w) * 180 / Math.PI
-    plane.style.transform = `translate(${px - PLANE_W / 2}px, ${py - PLANE_H / 2}px) rotate(${angle}deg)`
-    plane.style.opacity = '1'
-
-    if (rawT < 1) {
-      requestAnimationFrame(step)
-    } else {
+    if (ft < 1) {
+      requestAnimationFrame(frame)
+    } else if (!flyDone) {
       // === フェーズ3: 飛行機が右へ飛び去る ===
-      plane.style.transition = 'transform 1s ease-in, opacity 0.7s ease 0.3s'
-      plane.style.transform = `translate(${w + 60}px, ${py - PLANE_H / 2 - 30}px) rotate(-3deg)`
+      flyDone = true
+      plane.style.transition = 'transform 1.2s ease-in, opacity 0.8s ease 0.3s'
+      plane.style.transform = `translate(${w + PW}px,${py - PH / 2 - 50}px) rotate(-5deg)`
       plane.style.opacity = '0'
+      setTimeout(() => { exitDone = true }, 1200)
+      requestAnimationFrame(frame)
+    } else {
+      // === フェーズ4: 左から右へ排気が消えて一文字ずつテキスト出現 ===
+      const sinceDone = el - ENT_MS - FLY_MS
+      const REVEAL_DELAY = 300
+      const REVEAL_MS = 3500
 
-      visCanvas.style.transition = 'opacity 0.6s ease 0.3s'
-      title.style.transition = 'opacity 0.6s ease 0.3s'
-      title.style.opacity = '1'
-      visCanvas.style.opacity = '0'
-      setTimeout(() => { showSubtitle.value = true }, 600)
+      if (sinceDone > REVEAL_DELAY) {
+        const rt = Math.min((sinceDone - REVEAL_DELAY) / REVEAL_MS, 1)
+        const re = rt < 0.05 ? (rt / 0.05) ** 2 * 0.05 : rt
+        const revealPct = re * 100
+
+        if (!textShowing) {
+          textShowing = true
+          title.style.opacity = '1'
+          title.style.clipPath = 'inset(0 100% 0 0)'
+        }
+        title.style.clipPath = `inset(0 ${Math.max(0, 100 - revealPct)}% 0 0)`
+
+        // 表示済み領域の煙を加速消去
+        const revealWorldX = re * (w + PW * 0.3) - cOffX
+        for (const s of smokes) {
+          if (s.x < revealWorldX) s.a -= 0.025
+        }
+      }
+
+      if (sinceDone < REVEAL_DELAY + REVEAL_MS + 500 || smokes.length > 0) {
+        requestAnimationFrame(frame)
+      } else {
+        canvas.style.display = 'none'
+        title.style.clipPath = 'none'
+        setTimeout(() => { showSubtitle.value = true }, 600)
+      }
     }
   }
 
-  requestAnimationFrame(step)
+  requestAnimationFrame(frame)
 }
 
 onMounted(() => {
@@ -306,21 +301,49 @@ const handleKeydown = (e: KeyboardEvent) => {
           </div>
           <div class="contrail-wrapper">
             <h1 ref="titleEl" class="contrail-title">Travel AI Agent</h1>
-            <canvas ref="trailCanvasEl" class="trail-canvas"></canvas>
-            <svg ref="planeEl" class="plane-icon" viewBox="0 0 52 22" fill="none">
-              <!-- 機体 -->
-              <ellipse cx="22" cy="11" rx="22" ry="3.2" fill="rgba(255,255,255,0.95)"/>
-              <!-- 上翼 -->
-              <polygon points="16,8 10,0 34,9" fill="rgba(255,255,255,0.9)"/>
-              <!-- 下翼 -->
-              <polygon points="16,14 10,22 34,13" fill="rgba(255,255,255,0.85)"/>
-              <!-- 垂直尾翼 -->
-              <polygon points="40,9 46,3 46,9.5" fill="rgba(255,255,255,0.9)"/>
-              <!-- 水平尾翼下 -->
-              <polygon points="40,13 46,19 46,12.5" fill="rgba(255,255,255,0.85)"/>
-              <!-- コックピット -->
-              <ellipse cx="3" cy="11" rx="2.5" ry="2" fill="rgba(180,215,255,0.5)"/>
-            </svg>
+            <canvas ref="exhaustCanvasEl" class="exhaust-canvas"></canvas>
+            <div ref="planeEl" class="plane-container">
+              <svg class="plane-svg" viewBox="0 0 320 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- 胴体（JAL風クリーンホワイト） -->
+                <path d="M45,50 C45,37 62,28 90,27 L278,27 C302,27 314,37 318,50 C314,63 302,73 278,73 L90,73 C62,72 45,63 45,50Z" fill="white" fill-opacity="0.96"/>
+                <!-- 胴体下部シェード -->
+                <path d="M90,54 L278,54 C300,55 312,61 315,67 C310,72 298,73 278,73 L90,73 C64,72 48,63 46,53Z" fill="rgba(180,190,210,0.12)"/>
+                <!-- JAL風ベリーストライプ（Ylab赤） -->
+                <path d="M315,56 C310,62 295,68 275,70 L85,70 C65,69 50,63 47,56 C50,59 65,65 85,66 L275,66 C295,65 310,59 315,53Z" fill="#C03030" fill-opacity="0.65"/>
+                <!-- ベリーストライプ上の細いオレンジライン -->
+                <path d="M312,53 C308,57 294,62 275,63 L85,63 C66,62 52,58 48,53" stroke="#D98830" stroke-width="0.8" stroke-opacity="0.5" fill="none"/>
+                <!-- 窓帯ライン -->
+                <rect x="95" y="40.5" width="185" height="1" rx="0.5" fill="rgba(80,80,100,0.1)"/>
+                <!-- コックピット窓 -->
+                <path d="M300,42 C304,37 310,34 315,35 L317,47 L307,48Z" fill="rgba(30,50,90,0.7)"/>
+                <path d="M303,43 C306,39 310,38 314,38 L315,46 L308,47Z" fill="rgba(70,110,170,0.25)"/>
+                <!-- 客室窓 -->
+                <g fill="rgba(30,50,90,0.25)">
+                  <circle cx="104" cy="40" r="1.2"/><circle cx="112" cy="40" r="1.2"/><circle cx="120" cy="40" r="1.2"/><circle cx="128" cy="40" r="1.2"/><circle cx="136" cy="40" r="1.2"/><circle cx="144" cy="40" r="1.2"/><circle cx="152" cy="40" r="1.2"/><circle cx="160" cy="40" r="1.2"/><circle cx="168" cy="40" r="1.2"/>
+                  <circle cx="212" cy="40" r="1.2"/><circle cx="220" cy="40" r="1.2"/><circle cx="228" cy="40" r="1.2"/><circle cx="236" cy="40" r="1.2"/><circle cx="244" cy="40" r="1.2"/><circle cx="252" cy="40" r="1.2"/><circle cx="260" cy="40" r="1.2"/><circle cx="268" cy="40" r="1.2"/><circle cx="276" cy="40" r="1.2"/>
+                </g>
+                <!-- 主翼（後退翼） -->
+                <path d="M178,33 L132,5 C129,2 133,-1 136,2 L205,28Z" fill="white" fill-opacity="0.93"/>
+                <path d="M178,67 L132,95 C129,98 133,101 136,98 L205,72Z" fill="white" fill-opacity="0.87"/>
+                <!-- 翼上面ハイライト -->
+                <path d="M180,34 L148,12 L153,10 L205,29Z" fill="rgba(255,255,255,0.15)"/>
+                <!-- エンジンポッド（グレー系） -->
+                <rect x="143" y="77" width="30" height="12" rx="6" fill="rgba(160,165,175,0.85)"/>
+                <ellipse cx="144" cy="83" rx="4" ry="5.5" fill="rgba(80,90,110,0.3)"/>
+                <!-- エンジン排気口 -->
+                <ellipse cx="173" cy="83" rx="2" ry="4" fill="rgba(100,110,130,0.2)"/>
+                <!-- 垂直尾翼（大きめ・JAL風） -->
+                <path d="M65,27 L38,2 C36,-1 40,-3 43,0 L78,25Z" fill="white" fill-opacity="0.96"/>
+                <!-- 尾翼のYlab赤アクセント（JAL鶴丸エリア） -->
+                <path d="M63,27 L44,7 C43,5 46,4 48,6 L70,25Z" fill="#C03030" fill-opacity="0.55"/>
+                <!-- 水平尾翼 -->
+                <path d="M57,34 L40,18 C38,15 42,13 44,16 L68,32Z" fill="white" fill-opacity="0.9"/>
+                <path d="M57,66 L40,82 C38,85 42,87 44,84 L68,68Z" fill="white" fill-opacity="0.84"/>
+                <!-- 機首先端 -->
+                <ellipse cx="318" cy="50" rx="2" ry="8" fill="rgba(255,255,255,0.2)"/>
+              </svg>
+              <img src="/ylab-logo.png" class="plane-logo" alt="" />
+            </div>
           </div>
           <p class="subtitle" :class="{ 'show': showSubtitle }">Your Journey, Personalized</p>
           <div class="title-decoration bottom" :class="{ 'show': showSubtitle }">
@@ -559,23 +582,39 @@ const handleKeydown = (e: KeyboardEvent) => {
   opacity: 0;
 }
 
-.trail-canvas {
+.exhaust-canvas {
   position: absolute;
   top: 0;
   left: 0;
   pointer-events: none;
+  z-index: 5;
 }
 
-.plane-icon {
+.plane-container {
   position: absolute;
   top: 0;
   left: 0;
-  width: 52px;
-  height: 22px;
   opacity: 0;
-  filter: drop-shadow(0 2px 8px rgba(255,255,255,0.4));
+  filter: drop-shadow(0 4px 20px rgba(0,0,0,0.35));
   pointer-events: none;
   z-index: 10;
+}
+
+.plane-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.plane-logo {
+  position: absolute;
+  left: 11%;
+  top: 2%;
+  height: 30%;
+  width: auto;
+  object-fit: contain;
+  pointer-events: none;
+  opacity: 0.85;
 }
 
 .subtitle {
