@@ -4,6 +4,7 @@ import { api } from './lib/api'
 import { storage } from './lib/storage'
 import type { User, UserProfile, PreferenceSignal, LoginResponse } from './lib/api'
 import AppHeader from './components/AppHeader.vue'
+import SearchSplashScreen from './components/SearchSplashScreen.vue'
 import LoginScreen from './components/LoginScreen.vue'
 import ModeSelectScreen, { type SelectableMode } from './components/ModeSelectScreen.vue'
 import PreferenceLearningView from './components/PreferenceLearningView.vue'
@@ -14,6 +15,7 @@ const user = ref<User | null>(null)
 const isLoading = ref(false)
 const isInitializing = ref(true)
 const isLoggedIn = ref(false)
+const showSplash = ref(true)
 const userProfile = ref<UserProfile | null>(null)
 const preferenceSignals = ref<PreferenceSignal[]>([])
 const showProfileModal = ref(false)
@@ -177,11 +179,24 @@ onMounted(() => {
 
 <template>
   <div class="app">
+    <!-- Search Splash Screen -->
+    <Transition name="fade-screen">
+      <SearchSplashScreen
+        v-if="showSplash && !isLoggedIn && !isInitializing"
+        @done="showSplash = false"
+      />
+    </Transition>
+
     <!-- Login Screen -->
-    <LoginScreen v-if="!isLoggedIn && !isInitializing" @login="handleLogin" />
+    <Transition name="fade-screen">
+      <LoginScreen
+        v-if="!showSplash && !isLoggedIn && !isInitializing"
+        @login="handleLogin"
+      />
+    </Transition>
 
     <!-- Main App -->
-    <template v-else-if="isLoggedIn">
+    <template v-if="isLoggedIn">
       <!-- 背景画像 -->
       <div
         class="app-background"
@@ -570,5 +585,22 @@ onMounted(() => {
   font-weight: 400;
   letter-spacing: 2px;
   opacity: 0.9;
+}
+
+/* 画面切替フェードトランジション */
+.fade-screen-enter-active {
+  transition: opacity 0.6s ease;
+}
+
+.fade-screen-leave-active {
+  transition: opacity 0.6s ease;
+}
+
+.fade-screen-enter-from {
+  opacity: 0;
+}
+
+.fade-screen-leave-to {
+  opacity: 0;
 }
 </style>

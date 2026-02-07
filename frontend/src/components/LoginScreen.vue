@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted } from 'vue'
 import { api } from '../lib/api'
 import type { LoginResponse } from '../lib/api'
 
@@ -13,222 +13,29 @@ const error = ref<string | null>(null)
 
 // スクロール・アニメーション関連
 const loginSection = ref<HTMLElement | null>(null)
-const showContent = ref(false)
-const showLoginCard = ref(false)
+const titleChars = 'Travel AI Agent'.split('')
+const animateTitle = ref(false)
 const showSubtitle = ref(false)
+const showScrollHint = ref(false)
+const showLoginCard = ref(false)
 
-// 飛行機雲アニメーション
-const titleEl = ref<HTMLElement | null>(null)
-const planeEl = ref<HTMLElement | null>(null)
-const exhaustCanvasEl = ref<HTMLCanvasElement | null>(null)
-
-const animateContrail = async () => {
-  const title = titleEl.value
-  const plane = planeEl.value
-  const canvas = exhaustCanvasEl.value
-  if (!title || !plane || !canvas) return
-
-  await document.fonts.load('700 128px "Dancing Script"')
-  await nextTick()
-
-  const dpr = window.devicePixelRatio || 1
-  const w = title.offsetWidth
-  const h = title.offsetHeight
-
-  // 飛行機サイズ: テキスト高さに合わせる
-  const PH = h * 0.85
-  const PW = PH * 3.2
-
-  // キャンバス: テキスト幅 + 飛行機の余白
-  const cW = w + PW
-  const cH = h * 2.2
-  const cOffX = -PW * 0.3
-  const cOffY = -(cH - h) / 2
-
-  canvas.width = cW * dpr
-  canvas.height = cH * dpr
-  canvas.style.width = `${cW}px`
-  canvas.style.height = `${cH}px`
-  canvas.style.left = `${cOffX}px`
-  canvas.style.top = `${cOffY}px`
-  const ctx = canvas.getContext('2d')!
-  ctx.scale(dpr, dpr)
-
-  title.style.opacity = '0'
-
-  // 飛行経路
-  const flightPos = (t: number) => ({
-    x: -PW * 0.5 + t * (w + PW),
-    y: h / 2 + h * 0.05 * Math.sin(t * Math.PI * 1.5),
-  })
-
-  // 排気パーティクル
-  type Smoke = { x: number; y: number; r: number; a: number; vx: number; vy: number; mr: number }
-  const smokes: Smoke[] = []
-
-  const ENT_MS = 700
-  const FLY_MS = 5500
-  const t0 = performance.now()
-  let flyDone = false
-  let exitDone = false
-  let textShowing = false
-
-  plane.style.opacity = '0'
-  plane.style.transition = 'none'
-  plane.style.width = `${PW}px`
-  plane.style.height = `${PH}px`
-
-  const frame = (now: number) => {
-    const el = now - t0
-
-    // === フェーズ1: 飛行機が左から登場 ===
-    if (el < ENT_MS) {
-      const t = el / ENT_MS
-      const e = t * t * (3 - 2 * t)
-      const p0 = flightPos(0)
-      const sx = -PW - 60
-      const px = sx + (p0.x - sx) * e
-      plane.style.transform = `translate(${px - PW / 2}px,${p0.y - PH / 2}px)`
-      plane.style.opacity = `${Math.min(1, t * 2.5)}`
-      requestAnimationFrame(frame)
-      return
-    }
-
-    // === フェーズ2: 飛行（排気ガスを出しながら）===
-    const ft = Math.min((el - ENT_MS) / FLY_MS, 1)
-    const et = ft < 0.1 ? (ft / 0.1) ** 2 * 0.1
-      : ft > 0.9 ? 0.9 + (1 - (1 - (ft - 0.9) / 0.1) ** 2) * 0.1 : ft
-
-    const pos = flightPos(et)
-    const px = pos.x, py = pos.y
-
-    // 排気口位置（機体後方 → キャンバス座標系）
-    const exX = px - PW * 0.35 - cOffX
-    const exY = py - cOffY
-
-    // 排気パーティクル生成
-    if (ft > 0.01 && ft < 0.98) {
-      for (let i = 0; i < 6; i++) {
-        smokes.push({
-          x: exX + (Math.random() - 0.5) * 14,
-          y: exY + (Math.random() - 0.5) * PH * 0.3,
-          r: 3 + Math.random() * 5, a: 0.55 + Math.random() * 0.35,
-          vx: -1.0 - Math.random() * 1.5, vy: (Math.random() - 0.5) * 0.7,
-          mr: 20 + Math.random() * 35,
-        })
-      }
-      for (let i = 0; i < 4; i++) {
-        smokes.push({
-          x: exX + (Math.random() - 0.5) * 8,
-          y: exY + (Math.random() - 0.5) * PH * 0.5,
-          r: 1.5 + Math.random() * 2.5, a: 0.3 + Math.random() * 0.2,
-          vx: -0.4 - Math.random() * 0.8, vy: (Math.random() - 0.5) * 1.0,
-          mr: 10 + Math.random() * 18,
-        })
-      }
-    }
-
-    // パーティクル更新＆描画
-    ctx.clearRect(0, 0, cW, cH)
-    for (let i = smokes.length - 1; i >= 0; i--) {
-      const s = smokes[i]
-      s.x += s.vx; s.y += s.vy; s.vy *= 0.995
-      if (s.r < s.mr) s.r += (s.mr - s.r) * 0.025
-      s.a -= flyDone ? 0.007 : 0.0015
-      if (s.a <= 0) { smokes.splice(i, 1); continue }
-      ctx.globalAlpha = s.a
-      const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r)
-      g.addColorStop(0, 'rgba(255,255,255,0.9)')
-      g.addColorStop(0.45, 'rgba(255,255,255,0.5)')
-      g.addColorStop(1, 'rgba(255,255,255,0)')
-      ctx.fillStyle = g
-      ctx.beginPath()
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    ctx.globalAlpha = 1
-
-    // 飛行機の位置と角度
-    if (!exitDone) {
-      const np = flightPos(Math.min(et + 0.005, 1))
-      const ang = Math.atan2(np.y - pos.y, np.x - pos.x) * 180 / Math.PI
-      plane.style.transform = `translate(${px - PW / 2}px,${py - PH / 2}px) rotate(${ang}deg)`
-      plane.style.opacity = '1'
-    }
-
-    if (ft < 1) {
-      requestAnimationFrame(frame)
-    } else if (!flyDone) {
-      // === フェーズ3: 飛行機が右へ飛び去る ===
-      flyDone = true
-      plane.style.transition = 'transform 1.2s ease-in, opacity 0.8s ease 0.3s'
-      plane.style.transform = `translate(${w + PW}px,${py - PH / 2 - 50}px) rotate(-5deg)`
-      plane.style.opacity = '0'
-      setTimeout(() => { exitDone = true }, 1200)
-      requestAnimationFrame(frame)
-    } else {
-      // === フェーズ4: 左から右へ排気が消えて一文字ずつテキスト出現 ===
-      const sinceDone = el - ENT_MS - FLY_MS
-      const REVEAL_DELAY = 300
-      const REVEAL_MS = 3500
-
-      if (sinceDone > REVEAL_DELAY) {
-        const rt = Math.min((sinceDone - REVEAL_DELAY) / REVEAL_MS, 1)
-        const re = rt < 0.05 ? (rt / 0.05) ** 2 * 0.05 : rt
-        const revealPct = re * 100
-
-        if (!textShowing) {
-          textShowing = true
-          title.style.opacity = '1'
-          title.style.clipPath = 'inset(0 100% 0 0)'
-        }
-        title.style.clipPath = `inset(0 ${Math.max(0, 100 - revealPct)}% 0 0)`
-
-        // 表示済み領域の煙を加速消去
-        const revealWorldX = re * (w + PW * 0.3) - cOffX
-        for (const s of smokes) {
-          if (s.x < revealWorldX) s.a -= 0.025
-        }
-      }
-
-      if (sinceDone < REVEAL_DELAY + REVEAL_MS + 500 || smokes.length > 0) {
-        requestAnimationFrame(frame)
-      } else {
-        canvas.style.display = 'none'
-        title.style.clipPath = 'none'
-        setTimeout(() => { showSubtitle.value = true }, 600)
-      }
-    }
-  }
-
-  requestAnimationFrame(frame)
-}
+// タイトル全文字の出現完了までの時間を計算
+const titleDuration = 300 + titleChars.length * 80 + 1200 // start + stagger + animation
 
 onMounted(() => {
-  setTimeout(() => {
-    showContent.value = true
-  }, 100)
+  setTimeout(() => { animateTitle.value = true }, 300)
+  setTimeout(() => { showSubtitle.value = true }, titleDuration)
+  setTimeout(() => { showScrollHint.value = true }, titleDuration + 800)
 
-  // フェードイン後に飛行機雲アニメーション開始
-  setTimeout(() => {
-    animateContrail()
-  }, 800)
-
-  // Intersection Observerでログインセクションを監視
   const observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          showLoginCard.value = true
-        }
+        if (entry.isIntersecting) showLoginCard.value = true
       })
     },
     { threshold: 0.3 }
   )
-
-  if (loginSection.value) {
-    observer.observe(loginSection.value)
-  }
+  if (loginSection.value) observer.observe(loginSection.value)
 })
 
 const scrollToLogin = () => {
@@ -291,74 +98,32 @@ const handleKeydown = (e: KeyboardEvent) => {
 
     <!-- スクロールコンテナ -->
     <div class="scroll-container">
-      <!-- セクション1: スプラッシュ -->
+      <!-- セクション1: 筆記体タイトルスプラッシュ -->
       <section class="splash-section" @wheel="handleWheel">
-        <div class="splash-content" :class="{ 'show': showContent }">
-          <div class="title-decoration">
-            <span class="line left"></span>
-            <span class="diamond"></span>
-            <span class="line right"></span>
-          </div>
-          <div class="contrail-wrapper">
-            <h1 ref="titleEl" class="contrail-title">Travel AI Agent</h1>
-            <canvas ref="exhaustCanvasEl" class="exhaust-canvas"></canvas>
-            <div ref="planeEl" class="plane-container">
-              <svg class="plane-svg" viewBox="0 0 320 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <!-- 胴体（JAL風クリーンホワイト） -->
-                <path d="M45,50 C45,37 62,28 90,27 L278,27 C302,27 314,37 318,50 C314,63 302,73 278,73 L90,73 C62,72 45,63 45,50Z" fill="white" fill-opacity="0.96"/>
-                <!-- 胴体下部シェード -->
-                <path d="M90,54 L278,54 C300,55 312,61 315,67 C310,72 298,73 278,73 L90,73 C64,72 48,63 46,53Z" fill="rgba(180,190,210,0.12)"/>
-                <!-- JAL風ベリーストライプ（Ylab赤） -->
-                <path d="M315,56 C310,62 295,68 275,70 L85,70 C65,69 50,63 47,56 C50,59 65,65 85,66 L275,66 C295,65 310,59 315,53Z" fill="#C03030" fill-opacity="0.65"/>
-                <!-- ベリーストライプ上の細いオレンジライン -->
-                <path d="M312,53 C308,57 294,62 275,63 L85,63 C66,62 52,58 48,53" stroke="#D98830" stroke-width="0.8" stroke-opacity="0.5" fill="none"/>
-                <!-- 窓帯ライン -->
-                <rect x="95" y="40.5" width="185" height="1" rx="0.5" fill="rgba(80,80,100,0.1)"/>
-                <!-- コックピット窓 -->
-                <path d="M300,42 C304,37 310,34 315,35 L317,47 L307,48Z" fill="rgba(30,50,90,0.7)"/>
-                <path d="M303,43 C306,39 310,38 314,38 L315,46 L308,47Z" fill="rgba(70,110,170,0.25)"/>
-                <!-- 客室窓 -->
-                <g fill="rgba(30,50,90,0.25)">
-                  <circle cx="104" cy="40" r="1.2"/><circle cx="112" cy="40" r="1.2"/><circle cx="120" cy="40" r="1.2"/><circle cx="128" cy="40" r="1.2"/><circle cx="136" cy="40" r="1.2"/><circle cx="144" cy="40" r="1.2"/><circle cx="152" cy="40" r="1.2"/><circle cx="160" cy="40" r="1.2"/><circle cx="168" cy="40" r="1.2"/>
-                  <circle cx="212" cy="40" r="1.2"/><circle cx="220" cy="40" r="1.2"/><circle cx="228" cy="40" r="1.2"/><circle cx="236" cy="40" r="1.2"/><circle cx="244" cy="40" r="1.2"/><circle cx="252" cy="40" r="1.2"/><circle cx="260" cy="40" r="1.2"/><circle cx="268" cy="40" r="1.2"/><circle cx="276" cy="40" r="1.2"/>
-                </g>
-                <!-- 主翼（後退翼） -->
-                <path d="M178,33 L132,5 C129,2 133,-1 136,2 L205,28Z" fill="white" fill-opacity="0.93"/>
-                <path d="M178,67 L132,95 C129,98 133,101 136,98 L205,72Z" fill="white" fill-opacity="0.87"/>
-                <!-- 翼上面ハイライト -->
-                <path d="M180,34 L148,12 L153,10 L205,29Z" fill="rgba(255,255,255,0.15)"/>
-                <!-- エンジンポッド（グレー系） -->
-                <rect x="143" y="77" width="30" height="12" rx="6" fill="rgba(160,165,175,0.85)"/>
-                <ellipse cx="144" cy="83" rx="4" ry="5.5" fill="rgba(80,90,110,0.3)"/>
-                <!-- エンジン排気口 -->
-                <ellipse cx="173" cy="83" rx="2" ry="4" fill="rgba(100,110,130,0.2)"/>
-                <!-- 垂直尾翼（大きめ・JAL風） -->
-                <path d="M65,27 L38,2 C36,-1 40,-3 43,0 L78,25Z" fill="white" fill-opacity="0.96"/>
-                <!-- 尾翼のYlab赤アクセント（JAL鶴丸エリア） -->
-                <path d="M63,27 L44,7 C43,5 46,4 48,6 L70,25Z" fill="#C03030" fill-opacity="0.55"/>
-                <!-- 水平尾翼 -->
-                <path d="M57,34 L40,18 C38,15 42,13 44,16 L68,32Z" fill="white" fill-opacity="0.9"/>
-                <path d="M57,66 L40,82 C38,85 42,87 44,84 L68,68Z" fill="white" fill-opacity="0.84"/>
-                <!-- 機首先端 -->
-                <ellipse cx="318" cy="50" rx="2" ry="8" fill="rgba(255,255,255,0.2)"/>
-              </svg>
-              <img src="/ylab-logo.png" class="plane-logo" alt="" />
-            </div>
-          </div>
-          <p class="subtitle" :class="{ 'show': showSubtitle }">Your Journey, Personalized</p>
-          <div class="title-decoration bottom" :class="{ 'show': showSubtitle }">
-            <span class="line left"></span>
-            <span class="diamond"></span>
-            <span class="line right"></span>
+        <div class="splash-content">
+          <h1 class="cursive-title">
+            <span
+              v-for="(char, i) in titleChars"
+              :key="i"
+              class="title-char"
+              :class="{ animate: animateTitle }"
+              :style="{ animationDelay: `${i * 80}ms` }"
+            >{{ char === ' ' ? '\u00A0' : char }}</span>
+          </h1>
+          <div class="subtitle-area" :class="{ 'show': showSubtitle }">
+            <span class="subtitle-line"></span>
+            <p class="subtitle">Your Journey, Personalized</p>
+            <span class="subtitle-line"></span>
           </div>
         </div>
 
         <!-- スクロールインジケーター -->
-        <div class="scroll-indicator" :class="{ 'show': showSubtitle }" @click="scrollToLogin">
+        <div class="scroll-indicator" :class="{ 'show': showScrollHint }" @click="scrollToLogin">
           <span class="scroll-text">Scroll</span>
           <div class="scroll-arrow">
-            <span></span>
-            <span></span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
           </div>
         </div>
       </section>
@@ -457,7 +222,7 @@ const handleKeydown = (e: KeyboardEvent) => {
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;700&family=Playfair+Display:wght@400;700&family=Montserrat:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;700&family=Noto+Sans+JP:wght@400;500&family=Playfair+Display:wght@400;700&family=Montserrat:wght@300;400;500;600&display=swap');
 
 .login-screen {
   position: relative;
@@ -494,7 +259,6 @@ const handleKeydown = (e: KeyboardEvent) => {
   z-index: 1;
 }
 
-
 /* スクロールコンテナ */
 .scroll-container {
   position: relative;
@@ -522,182 +286,124 @@ const handleKeydown = (e: KeyboardEvent) => {
 
 .splash-content {
   text-align: center;
-  opacity: 0;
-  transform: translateY(40px);
-  transition: all 1.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.splash-content.show {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.title-decoration {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 15px;
-  margin-bottom: 20px;
-}
-
-.title-decoration.bottom {
-  margin-top: 20px;
-  margin-bottom: 0;
-  opacity: 0;
-  transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s;
-}
-
-.title-decoration.bottom.show {
-  opacity: 1;
-}
-
-.title-decoration .line {
-  width: 60px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
-}
-
-.title-decoration .diamond {
-  width: 8px;
-  height: 8px;
-  background: rgba(255,255,255,0.8);
-  transform: rotate(45deg);
-}
-
-/* 飛行機雲アニメーション */
-.contrail-wrapper {
-  position: relative;
-  display: inline-block;
-  overflow: visible;
-}
-
-.contrail-title {
+/* 筆記体タイトル */
+.cursive-title {
   font-family: 'Dancing Script', cursive;
   font-size: 8rem;
   font-weight: 700;
   color: white;
-  white-space: nowrap;
   margin: 0;
-  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+  line-height: 1.1;
+}
+
+.title-char {
+  display: inline-block;
   opacity: 0;
+  filter: blur(12px);
+  transform: translateY(8px);
 }
 
-.exhaust-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  pointer-events: none;
-  z-index: 5;
+.title-char.animate {
+  animation: char-appear 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.plane-container {
-  position: absolute;
-  top: 0;
-  left: 0;
+@keyframes char-appear {
+  0% {
+    opacity: 0;
+    filter: blur(12px);
+    transform: translateY(8px);
+  }
+  60% {
+    opacity: 0.8;
+    filter: blur(3px);
+    transform: translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+    text-shadow: 0 4px 30px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* サブタイトル */
+.subtitle-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
   opacity: 0;
-  filter: drop-shadow(0 4px 20px rgba(0,0,0,0.35));
-  pointer-events: none;
-  z-index: 10;
+  transform: translateY(15px);
+  transition: opacity 1.4s cubic-bezier(0.16, 1, 0.3, 1), transform 1.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.plane-svg {
-  width: 100%;
-  height: 100%;
-  display: block;
+.subtitle-area.show {
+  opacity: 1;
+  transform: translateY(0);
 }
 
-.plane-logo {
-  position: absolute;
-  left: 11%;
-  top: 2%;
-  height: 30%;
-  width: auto;
-  object-fit: contain;
-  pointer-events: none;
-  opacity: 0.85;
+.subtitle-line {
+  width: 60px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
 }
 
 .subtitle {
   font-family: 'Montserrat', sans-serif;
-  font-size: 1.5rem;
+  font-size: 1.2rem;
   font-weight: 300;
-  color: rgba(255, 255, 255, 0.9);
-  margin: 1.5rem 0 0;
-  letter-spacing: 6px;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0;
+  letter-spacing: 4px;
   text-transform: uppercase;
-  opacity: 0;
-  transform: translateY(15px);
-  transition: opacity 0.9s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.9s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.subtitle.show {
-  opacity: 1;
-  transform: translateY(0);
 }
 
 /* スクロールインジケーター */
 .scroll-indicator {
   position: absolute;
-  bottom: 50px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 3rem;
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 0.5rem;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 1s ease 0.6s;
+  transform: translateY(20px);
+  transition: opacity 1.4s cubic-bezier(0.16, 1, 0.3, 1), transform 1.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .scroll-indicator.show {
   opacity: 1;
+  transform: translateY(0);
 }
 
 .scroll-text {
   font-family: 'Montserrat', sans-serif;
   font-size: 0.75rem;
   font-weight: 400;
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.6);
   letter-spacing: 3px;
   text-transform: uppercase;
-  margin-bottom: 12px;
 }
 
 .scroll-arrow {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  width: 24px;
+  height: 24px;
+  color: rgba(255, 255, 255, 0.6);
+  animation: bounce-arrow 2s ease-in-out infinite;
 }
 
-.scroll-arrow span {
-  display: block;
-  width: 18px;
-  height: 18px;
-  border-right: 2px solid rgba(255, 255, 255, 0.6);
-  border-bottom: 2px solid rgba(255, 255, 255, 0.6);
-  transform: rotate(45deg);
-  animation: scroll-bounce 2s infinite;
+.scroll-arrow svg {
+  width: 100%;
+  height: 100%;
 }
 
-.scroll-arrow span:nth-child(2) {
-  animation-delay: 0.2s;
-  margin-top: -10px;
-}
-
-@keyframes scroll-bounce {
-  0% {
-    opacity: 0;
-    transform: rotate(45deg) translate(-5px, -5px);
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: rotate(45deg) translate(5px, 5px);
-  }
+@keyframes bounce-arrow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(8px); }
 }
 
 /* ログインセクション */
@@ -1067,13 +773,17 @@ const handleKeydown = (e: KeyboardEvent) => {
 
 /* レスポンシブ */
 @media (max-width: 600px) {
-  .contrail-title {
-    font-size: 4.5rem;
+  .cursive-title {
+    font-size: 4rem;
   }
 
   .subtitle {
-    font-size: 1rem;
-    letter-spacing: 3px;
+    font-size: 0.9rem;
+    letter-spacing: 2px;
+  }
+
+  .subtitle-line {
+    width: 30px;
   }
 
   .welcome-text h2 {
@@ -1083,10 +793,6 @@ const handleKeydown = (e: KeyboardEvent) => {
 
   .login-header h1 {
     font-size: 1.4rem;
-  }
-
-  .title-decoration .line {
-    width: 40px;
   }
 }
 </style>
