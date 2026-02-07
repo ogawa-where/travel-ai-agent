@@ -4,6 +4,8 @@
 
 ユーザーの**長期嗜好（長期記憶）**、今回の**要求（短期記憶）**、およびオンラインから取得した**実世界情報（Tavily）**を用いて、体験型かつパーソナライズされた旅行計画を自動生成するマルチエージェントシステムです。
 
+![ログイン画面](docs/screenshots/login.png)
+
 ## 参考研究
 
 **Personal Travel Solver (PTS)**: Shao et al., "Personal Travel Solver: A Preference-Driven LLM-Solver System for Travel Planning", ACL 2025
@@ -70,7 +72,7 @@
         ┌─────────────────┼─────────────────┐
         ▼                 ▼                 ▼
 ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│    nubia      │ │    qilin      │ │    ranco      │
+│    nubia      │ │    qilin      │ │    gouin      │
 │  RTX 3090 Ti  │ │   RTX 3090    │ │   RTX 3090    │
 │  Heavy LLM    │ │  Light LLM    │ │  Embedding    │
 │  qwen:32b     │ │  gemma3:12b   │ │ nomic-embed   │
@@ -90,7 +92,7 @@ Translator Agent ─── 自然言語 → 制約/嗜好JSON
 SearchReasoningLoop x4（並列）
   ├── Activity Search (nubia)
   ├── Food Search (qilin)
-  ├── Hotel Search (ranco)
+  ├── Hotel Search (gouin)
   └── Transportation Search (mafu)
   │
   ▼
@@ -112,40 +114,72 @@ Explainer Agent ─── 根拠説明生成
 旅程 + 説明 + マップ
 ```
 
-## エージェント一覧
+## エージェント設計
 
-### Heavy LLM エージェント（qwen2.5-bakeneko-32b / nubia）
+本システムのエージェントは、必要な計算資源と役割に応じて **5つの種類** に分類されます。
 
-| エージェント | 役割 |
-|-------------|------|
-| Planner | 制約+スコアリングで旅程生成 |
-| Explainer | 嗜好と体験軸に基づく根拠説明生成 |
-| Profile Updater | 長期記憶（プロフィール/嗜好シグナル）更新 |
-| Search Evaluator | 4カテゴリ横断の検索結果評価 |
+### エージェント種類
 
-### Light LLM エージェント（gemma3:12b / qilin）
+| 種類 | 説明 | 使用モデル | 配置サーバー |
+|------|------|-----------|-------------|
+| **Heavy LLM** | 複雑な推論・生成を行うエージェント。制約充足、旅程構成、根拠説明など高い言語能力が求められるタスクを担当。32Bクラスのモデルを使用するため同時実行は1。 | qwen2.5-bakeneko-32b | nubia |
+| **Light LLM** | 要約・抽出・短文生成など比較的単純なLLMタスクを担当。応答速度を重視し、12Bクラスの軽量モデルで同時2つまで実行可能。 | gemma3:12b | qilin |
+| **Embedding** | テキストをベクトル化し、嗜好と候補POIの類似度計算・リランキングを行う。埋め込みモデルは軽量なため多数並列実行が可能。 | nomic-embed-text | gouin |
+| **検索推論** | カテゴリごとに「推論→検索クエリ生成→Tavily検索→結果検証」の自律ループを実行。検索フェーズでは4サーバーすべてが並列で稼働し、各サーバーが1カテゴリを専任。 | qwen2.5:32b-instruct | 全4台 |
+| **I/Oツール** | LLMを使わない決定論的処理。検索結果の正規化・重複排除、POIキャッシュなど。純粋なコードロジックで実行。 | なし | mafu |
 
-| エージェント | 役割 |
-|-------------|------|
-| Translator | 要求文 → 制約/嗜好JSON変換 |
-| Summarizer | 短期要約（session_summary）更新 |
-| Preference Learner | 会話から嗜好シグナルを抽出 |
-| Gathering Agent | 不足情報の対話収集 |
+### エージェント一覧
 
-### Embedding エージェント（nomic-embed-text / ranco）
+#### Heavy LLM エージェント（nubia / qwen2.5-bakeneko-32b）
 
-| エージェント | 役割 |
-|-------------|------|
-| Reranker | 体験ベース埋め込み類似度でPOIランク付け |
+| エージェント | ファイル | 役割 |
+|-------------|---------|------|
+| Planner | `planner.py` | 制約（時間・予算・営業時間）を充足しながらタイムスロット付き旅程を生成。スコアリングで最適化。 |
+| Explainer | `explainer.py` | 生成された旅程に対して「なぜこのPOIを選んだか」をユーザーの嗜好・体験軸に紐づけて説明文を生成。 |
+| Profile Updater | `profile_updater.py` | 嗜好学習の完了時やフィードバック後に、長期記憶（プロフィール要約 + 嗜好シグナル）を統合更新。 |
+| Search Evaluator | `search_evaluator.py` | 4カテゴリの検索結果を横断的に評価し、カテゴリ間のバランスや体験の多様性をスコアリング。 |
 
-### 検索フェーズ（4サーバー並列 / qwen2.5:32b-instruct）
+#### Light LLM エージェント（qilin / gemma3:12b）
 
-| カテゴリ | サーバー |
-|---------|---------|
-| Activity（体験・観光） | nubia |
-| Food（食） | qilin |
-| Hotel（宿） | ranco |
-| Transportation（交通） | mafu |
+| エージェント | ファイル | 役割 |
+|-------------|---------|------|
+| Translator | `translator.py` | 自然言語の旅行要求を構造化JSON（TravelConstraints + TravelWishes）に変換。 |
+| Summarizer | `summarizer.py` | 3ターンを超えた古い会話履歴を session_summary に圧縮。決定事項・制約・未解決事項を保持。 |
+| Preference Learner | `preference_learner.py` | ユーザー発話から嗜好シグナル（category / tag / weight / evidence）を抽出。会話中に常時稼働。 |
+| Gathering Agent | `gathering_agent.py` | 旅行企画に必要な情報（日程・人数・予算等）が不足している場合に対話で収集。 |
+
+#### Embedding エージェント（gouin / nomic-embed-text）
+
+| エージェント | ファイル | 役割 |
+|-------------|---------|------|
+| Reranker | `rerank.py` | POIから抽出した「体験の本質」と、ユーザーの嗜好をそれぞれ埋め込みベクトル化し、コサイン類似度でリランキング。 |
+
+#### 検索推論エージェント（4サーバー並列 / qwen2.5:32b-instruct）
+
+| エージェント | ファイル | 役割 |
+|-------------|---------|------|
+| SearchReasoningLoop | `search_agents.py` | カテゴリごとに自律的な推論ループを実行。LLMが検索クエリを生成→Tavilyで検索→結果を検証→不足があれば再検索。 |
+| ActivitySearchAgent | `search_agents.py` | 体験・観光カテゴリの検索（nubia で実行） |
+| FoodSearchAgent | `search_agents.py` | 食カテゴリの検索（qilin で実行） |
+| HotelSearchAgent | `search_agents.py` | 宿泊カテゴリの検索（gouin で実行） |
+| TransportationSearchAgent | `search_agents.py` | 交通・アクセスカテゴリの検索（mafu で実行） |
+
+#### I/O ツールエージェント（決定論コード）
+
+| エージェント | ファイル | 役割 |
+|-------------|---------|------|
+| Normalizer / Deduper | `services/normalizer.py` | 4カテゴリの検索結果を統一フォーマットに正規化し、重複POIを排除。 |
+| Experience Extractor | `services/experience_extractor.py` | POIの生データから「体験の本質」（場所名ではなく体験タイプ）を抽出。 |
+| POI Cache | `services/poi_cache.py` | 正規化済みPOIと体験抽出結果をキャッシュし、再検索を抑制。 |
+
+### 検索フェーズのサーバー割り当て
+
+| カテゴリ | サーバー | モデル |
+|---------|---------|--------|
+| Activity（体験・観光） | nubia | qwen2.5:32b-instruct |
+| Food（食） | qilin | qwen2.5:32b-instruct |
+| Hotel（宿） | gouin | qwen2.5:32b-instruct |
+| Transportation（交通） | mafu | qwen2.5:32b-instruct |
 
 ## 記憶設計
 
@@ -230,10 +264,10 @@ cp .env.example .env
 
 ```bash
 # Ollama（4サーバー構成）
-OLLAMA_WORKERS=nubia:11434,qilin:11434,ranco:11434,mafu:11434
+OLLAMA_WORKERS=nubia:11434,qilin:11434,gouin:11434,mafu:11434
 OLLAMA_WORKER_HEAVY=nubia:11434
 OLLAMA_WORKER_LIGHT=qilin:11434
-OLLAMA_WORKER_EMBED=ranco:11434
+OLLAMA_WORKER_EMBED=gouin:11434
 OLLAMA_WORKER_MAFU=mafu:11434
 OLLAMA_MODEL_HEAVY=qwen2.5-bakeneko-32b-instruct-v2
 OLLAMA_MODEL_LIGHT=gemma3:12B
