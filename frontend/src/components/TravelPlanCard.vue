@@ -236,12 +236,16 @@ const closePOIDetail = () => {
 
 <style scoped>
 .plan-card {
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(102, 126, 234, 0.12);
+  border-radius: 16px;
   overflow: hidden;
   margin: 0.5rem 0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 2px 8px rgba(102, 126, 234, 0.06),
+    0 8px 32px rgba(102, 126, 234, 0.04);
 }
 
 .plan-header {
@@ -254,7 +258,7 @@ const closePOIDetail = () => {
 }
 
 .plan-header:hover {
-  background: #f7fafc;
+  background: rgba(102, 126, 234, 0.04);
 }
 
 .plan-icon {
@@ -263,8 +267,8 @@ const closePOIDetail = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #ebf8ff;
-  color: #3182ce;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(118, 75, 162, 0.12) 100%);
+  color: #667eea;
   border-radius: 10px;
 }
 
@@ -315,31 +319,34 @@ const closePOIDetail = () => {
 .highlight-tag {
   font-size: 0.75rem;
   padding: 4px 10px;
-  background: #edf2f7;
-  color: #4a5568;
+  background: rgba(102, 126, 234, 0.08);
+  color: #667eea;
   border-radius: 12px;
+  border: 1px solid rgba(102, 126, 234, 0.1);
 }
 
 .plan-details {
   padding: 0 16px 16px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid rgba(102, 126, 234, 0.08);
 }
 
 .feedback-hint {
   padding: 8px 12px;
   margin: 12px 0;
-  background: #ebf8ff;
-  color: #2b6cb0;
-  border-radius: 6px;
+  background: rgba(102, 126, 234, 0.08);
+  color: #667eea;
+  border-radius: 8px;
   font-size: 0.8rem;
   text-align: center;
+  border: 1px solid rgba(102, 126, 234, 0.1);
 }
 
 .rationale {
   margin-top: 16px;
   padding: 12px;
-  background: #f7fafc;
-  border-radius: 8px;
+  background: rgba(102, 126, 234, 0.04);
+  border-radius: 10px;
+  border: 1px solid rgba(102, 126, 234, 0.06);
 }
 
 .rationale h4 {
@@ -358,38 +365,41 @@ const closePOIDetail = () => {
 .feedback-section {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid rgba(102, 126, 234, 0.08);
 }
 
 .feedback-toggle {
   width: 100%;
   padding: 10px;
-  background: #edf2f7;
-  border: none;
-  border-radius: 8px;
-  color: #4a5568;
+  background: rgba(102, 126, 234, 0.06);
+  border: 1px solid rgba(102, 126, 234, 0.1);
+  border-radius: 10px;
+  color: #667eea;
   font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 .feedback-toggle:hover {
-  background: #e2e8f0;
+  background: rgba(102, 126, 234, 0.12);
 }
 
 .feedback-form textarea {
   width: 100%;
   padding: 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border: 1px solid rgba(102, 126, 234, 0.15);
+  border-radius: 10px;
   font-size: 0.9rem;
   resize: vertical;
   font-family: inherit;
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .feedback-form textarea:focus {
   outline: none;
-  border-color: #4299e1;
+  border-color: rgba(102, 126, 234, 0.5);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
 .feedback-actions {
@@ -401,22 +411,33 @@ const closePOIDetail = () => {
 
 .cancel-btn {
   padding: 8px 16px;
-  background: #edf2f7;
-  border: none;
-  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
   color: #4a5568;
   font-size: 0.85rem;
   cursor: pointer;
+  transition: background 0.2s;
+}
+
+.cancel-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .submit-btn {
   padding: 8px 16px;
-  background: #4299e1;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   color: white;
   font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s;
+}
+
+.submit-btn:hover:not(:disabled) {
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
 .submit-btn:disabled {
@@ -440,7 +461,7 @@ const closePOIDetail = () => {
   height: 250px;
   background: linear-gradient(110deg, #e2e8f0 8%, #edf2f7 18%, #e2e8f0 33%);
   background-size: 200% 100%;
-  border-radius: 8px;
+  border-radius: 10px;
   animation: skeleton-shine 1.5s linear infinite;
 }
 
@@ -460,17 +481,18 @@ const closePOIDetail = () => {
   width: 100%;
   margin-top: 8px;
   padding: 8px;
-  background: #edf2f7;
-  border: none;
-  border-radius: 6px;
-  color: #4a5568;
+  background: rgba(102, 126, 234, 0.06);
+  border: 1px solid rgba(102, 126, 234, 0.1);
+  border-radius: 8px;
+  color: #667eea;
   font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 .map-expand-btn:hover {
-  background: #e2e8f0;
+  background: rgba(102, 126, 234, 0.12);
 }
 
 /* Transition */

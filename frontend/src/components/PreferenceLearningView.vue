@@ -10,6 +10,7 @@ interface Props {
 
 interface Emits {
   (e: 'preferences-updated', signals: PreferenceSignal[]): void
+  (e: 'profile-updated'): void
   (e: 'back-to-select'): void
   (e: 'go-to-planning'): void
 }
@@ -43,15 +44,13 @@ const messageSignals = ref<Map<number, InlineSignal[]>>(new Map())
 const signalCategoryIcon: Record<string, string> = {
   likes: '♥',
   dislikes: '✗',
-  experience_axis: '◈',
-  constraints: '⚙',
+  tendency: '◎',
 }
 
 const signalCategoryLabel: Record<string, string> = {
   likes: 'Like',
   dislikes: 'Dislike',
-  experience_axis: 'Experience',
-  constraints: 'Constraint',
+  tendency: 'Style',
 }
 
 const handleCompositionStart = () => {
@@ -214,6 +213,9 @@ const sendMessage = async () => {
         streamingMessageIndex.value = -1
         nextTick(() => checkScrollArrow())
       },
+      () => {
+        emit('profile-updated')
+      },
       (error: string) => {
         console.error('Streaming error:', error)
         if (streamingMessageIndex.value >= 0) {
@@ -312,7 +314,7 @@ onMounted(() => {
 
             <div class="message-content">
               <div class="message-meta">
-                <span class="message-sender">{{ message.role === 'assistant' ? 'Travel AI' : 'あなた' }}</span>
+                <span class="message-sender">{{ message.role === 'assistant' ? 'Travel AI Agent' : 'あなた' }}</span>
               </div>
               <!-- 思考中UI -->
               <div v-if="isStreaming && index === streamingMessageIndex && !message.content" class="thinking-card">
@@ -337,6 +339,7 @@ onMounted(() => {
                     v-for="(sig, si) in messageSignals.get(index)"
                     :key="si"
                     :class="['signal-chip', sig.category, { 'signal-visible': sig.visible }]"
+                    :style="{ '--signal-weight': Math.min(1, Math.max(0.15, sig.weight)) }"
                   >
                     <span class="signal-icon">{{ signalCategoryIcon[sig.category] || '✦' }}</span>
                     <span class="signal-category">{{ signalCategoryLabel[sig.category] || 'Learned' }}</span>
@@ -362,7 +365,7 @@ onMounted(() => {
             </div>
             <div class="message-content">
               <div class="message-meta">
-                <span class="message-sender">Travel AI</span>
+                <span class="message-sender">Travel AI Agent</span>
               </div>
               <div class="thinking-card">
                 <div class="thinking-flow">
@@ -846,6 +849,7 @@ onMounted(() => {
 }
 
 .signal-chip {
+  --signal-weight: 0.5;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -886,21 +890,16 @@ onMounted(() => {
 }
 
 .signal-chip.likes .signal-icon {
-  background: linear-gradient(135deg, #667eea, #a78bfa);
+  background: linear-gradient(135deg, #10b981, #059669);
   color: white;
 }
 
 .signal-chip.dislikes .signal-icon {
-  background: linear-gradient(135deg, #fda4af, #f472b6);
+  background: linear-gradient(135deg, #fb7185, #f43f5e);
   color: white;
 }
 
-.signal-chip.experience_axis .signal-icon {
-  background: linear-gradient(135deg, #818cf8, #764ba2);
-  color: white;
-}
-
-.signal-chip.constraints .signal-icon {
+.signal-chip.tendency .signal-icon {
   background: linear-gradient(135deg, #fbbf24, #f59e0b);
   color: white;
 }
@@ -918,10 +917,23 @@ onMounted(() => {
   color: #2d3748;
 }
 
-.signal-chip.likes { border-color: rgba(102, 126, 234, 0.18); }
-.signal-chip.dislikes { border-color: rgba(244, 114, 182, 0.18); }
-.signal-chip.experience_axis { border-color: rgba(129, 140, 248, 0.18); }
-.signal-chip.constraints { border-color: rgba(251, 191, 36, 0.18); }
+.signal-chip.likes {
+  background: rgba(16, 185, 129, calc(0.06 + var(--signal-weight) * 0.2));
+  border-color: rgba(16, 185, 129, calc(0.1 + var(--signal-weight) * 0.25));
+}
+.signal-chip.likes .signal-tag { color: #065f46; }
+
+.signal-chip.dislikes {
+  background: rgba(244, 63, 94, calc(0.06 + var(--signal-weight) * 0.2));
+  border-color: rgba(244, 63, 94, calc(0.1 + var(--signal-weight) * 0.25));
+}
+.signal-chip.dislikes .signal-tag { color: #9f1239; }
+
+.signal-chip.tendency {
+  background: rgba(245, 158, 11, calc(0.06 + var(--signal-weight) * 0.2));
+  border-color: rgba(245, 158, 11, calc(0.1 + var(--signal-weight) * 0.25));
+}
+.signal-chip.tendency .signal-tag { color: #92400e; }
 
 /* signal transition group */
 .signal-enter-active {

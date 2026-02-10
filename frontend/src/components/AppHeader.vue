@@ -15,7 +15,10 @@ const emit = defineEmits<{
     <div class="header-content">
       <div class="header-brand">
         <h1>Travel AI Agent</h1>
-        <p>Your Journey, Personalized</p>
+        <span class="brand-badge">
+          <span class="brand-by">by</span>
+          <img :src="'/ylab-logo.png'" alt="Ylab" class="brand-logo" @error="($event.target as HTMLImageElement).style.display='none'" />
+        </span>
       </div>
       <div class="header-actions">
         <button
@@ -64,6 +67,44 @@ const emit = defineEmits<{
   margin: 0 auto;
 }
 
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 10px;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 20px;
+  transition: box-shadow 0.2s ease;
+}
+
+.brand-badge:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.brand-by {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 400;
+  font-style: italic;
+  color: #a0aec0;
+}
+
+.brand-logo {
+  height: 26px;
+  width: auto;
+  object-fit: contain;
+}
+
+
 .header-brand h1 {
   margin: 0;
   font-family: 'Playfair Display', serif;
@@ -71,16 +112,6 @@ const emit = defineEmits<{
   font-weight: 600;
   color: #1a202c;
   letter-spacing: 0.5px;
-}
-
-.header-brand p {
-  margin: 0.2rem 0 0;
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: #4a5568;
-  letter-spacing: 2px;
-  text-transform: uppercase;
 }
 
 .header-actions {
@@ -168,12 +199,12 @@ const emit = defineEmits<{
     padding: 0.75rem 1rem;
   }
 
-  .header-brand h1 {
-    font-size: 1.2rem;
+  .brand-logo {
+    height: 20px;
   }
 
-  .header-brand p {
-    font-size: 0.65rem;
+  .header-brand h1 {
+    font-size: 1.2rem;
   }
 
   .profile-btn span {

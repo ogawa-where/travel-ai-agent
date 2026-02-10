@@ -119,9 +119,13 @@ async def create_travel_plan(
             user_profile_summary=profile_summary,
             preference_signals=preference_signals,
         )
+        plan_request.status = "completed"
+        await db.commit()
         return travel_plan
     except Exception as e:
         logger.error(f"Failed to create travel plan: {e}")
+        plan_request.status = "failed"
+        await db.commit()
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
 
 
@@ -210,6 +214,8 @@ async def plan_with_form(
             pre_wishes=wishes,
         )
 
+        plan_request.status = "completed"
+
         assistant_message = _format_plan_response(travel_plan)
 
         await session_manager.add_message(
@@ -226,6 +232,8 @@ async def plan_with_form(
         )
     except Exception as e:
         logger.error(f"Form-based plan generation failed: {e}")
+        plan_request.status = "failed"
+        await db.commit()
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
 
 
@@ -352,24 +360,30 @@ async def plan_with_form_stream(
             # オーケストレーターの結果を取得
             travel_plan = await orchestrator_task
 
+            plan_request.status = "completed"
+
             assistant_message = _format_plan_response(travel_plan)
 
             await session_manager.add_message(
                 db, session.id, role="assistant", content=assistant_message
             )
 
+            await db.commit()
+
             # 完了イベントを送信
             done_data = {
                 "type": "done",
                 "session_id": str(session.id),
                 "plan_request_id": str(plan_request.id),
-                "plan": TravelPlanResponse.model_validate(travel_plan).model_dump(),
+                "plan": TravelPlanResponse.model_validate(travel_plan).model_dump(mode="json"),
                 "assistant_message": assistant_message,
             }
             yield f"data: {json.dumps(done_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f"Plan generation stream error: {e}")
+            plan_request.status = "failed"
+            await db.commit()
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -414,6 +428,20 @@ async def get_travel_plan(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     return plan
+
+
+@router.get("/plans/by-request/{request_id}", response_model=list[TravelPlanResponse])
+async def get_plans_by_request(
+    request_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[TravelPlan]:
+    """リクエストIDに紐づく旅行プラン一覧を取得"""
+    result = await db.execute(
+        select(TravelPlan)
+        .where(TravelPlan.request_id == request_id)
+        .order_by(TravelPlan.version)
+    )
+    return list(result.scalars().all())
 
 
 @router.get("/requests/{user_id}", response_model=list[TravelPlanRequestResponse])
@@ -503,6 +531,8 @@ async def travel_chat(
                 preference_signals=preference_signals,
             )
 
+            plan_request.status = "completed"
+
             assistant_message = _format_plan_response(travel_plan)
 
             await session_manager.add_message(
@@ -518,6 +548,7 @@ async def travel_chat(
                 status="completed",
             )
         except Exception as e:
+            plan_request.status = "failed"
             logger.error(f"Plan generation failed: {e}")
             error_message = "申し訳ありません。プランの生成中にエラーが発生しました。もう一度お試しください。"
             await session_manager.add_message(
@@ -950,6 +981,8 @@ async def generate_plan(
             pre_wishes=wishes,
         )
 
+        plan_request.status = "completed"
+
         assistant_message = _format_plan_response(travel_plan)
 
         await session_manager.add_message(
@@ -968,6 +1001,7 @@ async def generate_plan(
         )
 
     except Exception as e:
+        plan_request.status = "failed"
         logger.error(f"Plan generation failed: {e}")
         error_message = "申し訳ありません。プランの生成中にエラーが発生しました。もう一度お試しください。"
         await session_manager.add_message(

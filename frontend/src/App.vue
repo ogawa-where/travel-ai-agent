@@ -133,7 +133,16 @@ const handleGoToPlanning = () => {
 }
 
 const handlePreferencesUpdated = async (_newSignals: PreferenceSignal[]) => {
-  // Refresh user profile
+  // シグナルはインラインで表示されるため、ここではプロフィール更新のみ
+  await refreshUserProfile()
+}
+
+const handleProfileUpdated = async () => {
+  // profile_updated SSEイベント受信時：即座にプロフィールを再取得
+  await refreshUserProfile()
+}
+
+const refreshUserProfile = async () => {
   if (user.value) {
     try {
       const updatedUser = await api.getUser(user.value.id)
@@ -208,6 +217,7 @@ onMounted(() => {
                 v-if="activeMode === 'preference'"
                 :user="user"
                 @preferences-updated="handlePreferencesUpdated"
+                @profile-updated="handleProfileUpdated"
                 @back-to-select="handleBackToSelect"
                 @go-to-planning="handleGoToPlanning"
               />
@@ -249,11 +259,11 @@ onMounted(() => {
                       v-for="signal in signals"
                       :key="signal.id"
                       class="preference-tag"
-                      :class="{ 'positive': signal.weight > 0, 'negative': signal.weight < 0 }"
+                      :class="category"
+                      :style="{ '--signal-weight': Math.min(1, Math.max(0.15, signal.weight)) }"
                       :title="signal.evidence"
                     >
                       <span class="tag-name">{{ signal.tag }}</span>
-                      <span class="tag-weight">{{ Math.abs(signal.weight).toFixed(1) }}</span>
                     </div>
                   </div>
                 </div>
@@ -491,40 +501,42 @@ onMounted(() => {
 }
 
 .preference-tag {
+  --signal-weight: 0.5;
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.6rem;
+  padding: 0.4rem 0.75rem;
   border-radius: 20px;
   font-size: 0.8rem;
+  font-weight: 500;
   cursor: default;
-  transition: transform 0.1s;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .preference-tag:hover {
-  transform: scale(1.02);
+  transform: scale(1.04);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
-.preference-tag.positive {
-  background: rgba(72, 187, 120, 0.15);
-  color: #276749;
-  border: 1px solid rgba(72, 187, 120, 0.3);
+.preference-tag.likes {
+  background: rgba(16, 185, 129, calc(0.08 + var(--signal-weight) * 0.3));
+  color: color-mix(in srgb, #059669 calc(40% + var(--signal-weight) * 60%), #1a202c);
+  border: 1px solid rgba(16, 185, 129, calc(0.1 + var(--signal-weight) * 0.3));
 }
 
-.preference-tag.negative {
-  background: rgba(245, 101, 101, 0.15);
-  color: #c53030;
-  border: 1px solid rgba(245, 101, 101, 0.3);
+.preference-tag.dislikes {
+  background: rgba(244, 63, 94, calc(0.08 + var(--signal-weight) * 0.3));
+  color: color-mix(in srgb, #e11d48 calc(40% + var(--signal-weight) * 60%), #1a202c);
+  border: 1px solid rgba(244, 63, 94, calc(0.1 + var(--signal-weight) * 0.3));
+}
+
+.preference-tag.tendency {
+  background: rgba(245, 158, 11, calc(0.08 + var(--signal-weight) * 0.3));
+  color: color-mix(in srgb, #d97706 calc(40% + var(--signal-weight) * 60%), #1a202c);
+  border: 1px solid rgba(245, 158, 11, calc(0.1 + var(--signal-weight) * 0.3));
 }
 
 .tag-name {
   font-weight: 500;
-}
-
-.tag-weight {
-  font-size: 0.7rem;
-  opacity: 0.7;
-  font-weight: 400;
 }
 
 .no-profile {

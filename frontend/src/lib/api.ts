@@ -340,6 +340,19 @@ interface POIDetail {
   source_name: string | null
 }
 
+// 旅行企画リクエスト履歴レスポンス
+interface TravelPlanRequestResponse {
+  id: string
+  session_id: string
+  user_id: string
+  raw_request: string
+  constraints: Record<string, unknown>
+  wishes: Record<string, unknown>
+  status: string
+  created_at: string
+  updated_at: string
+}
+
 export const api = {
   async healthCheck(): Promise<HealthResponse> {
     const response = await fetchWithErrorHandling(`${API_BASE_URL}/health`)
@@ -418,6 +431,7 @@ export const api = {
     onChunk: (content: string) => void,
     onSignals?: (signals: PreferenceSignal[]) => void,
     onDone?: (sessionId: string) => void,
+    onProfileUpdated?: () => void,
     onError?: (error: string) => void,
   ): Promise<void> {
     const response = await fetch(`${API_BASE_URL}/api/preference/chat/stream`, {
@@ -468,6 +482,9 @@ export const api = {
                   break
                 case 'signals':
                   onSignals?.(data.signals)
+                  break
+                case 'profile_updated':
+                  onProfileUpdated?.()
                   break
                 case 'done':
                   onDone?.(data.session_id)
@@ -879,6 +896,18 @@ export const api = {
     return response.json()
   },
 
+  // 旅行企画履歴取得
+  async getUserTravelHistory(userId: string): Promise<TravelPlanRequestResponse[]> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/requests/${userId}`)
+    return response.json()
+  },
+
+  // リクエストIDに紐づくプラン一覧取得
+  async getPlansByRequestId(requestId: string): Promise<TravelPlan[]> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/plans/by-request/${requestId}`)
+    return response.json()
+  },
+
   // POI詳細取得
   async getPOIDetail(
     poiName: string,
@@ -895,4 +924,4 @@ export const api = {
   },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse, POIDetail, MatchTag }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse, POIDetail, MatchTag, TravelPlanRequestResponse }
