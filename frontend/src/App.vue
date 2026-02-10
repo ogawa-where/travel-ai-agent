@@ -9,7 +9,6 @@ import LoginScreen from './components/LoginScreen.vue'
 import ModeSelectScreen, { type SelectableMode } from './components/ModeSelectScreen.vue'
 import PreferenceLearningView from './components/PreferenceLearningView.vue'
 import TravelPlanningView from './components/TravelPlanningView.vue'
-import PreferenceToast from './components/PreferenceToast.vue'
 
 const user = ref<User | null>(null)
 const isLoading = ref(false)
@@ -36,9 +35,6 @@ const selectRandomBackground = () => {
   const randomIndex = Math.floor(Math.random() * backgroundImages.length)
   currentBackground.value = backgroundImages[randomIndex]
 }
-
-// Toast notifications for learned preferences
-const pendingToasts = ref<{category: string; tag: string; weight: number; is_new: boolean}[]>([])
 
 // Group preferences by category
 const groupedPreferences = computed(() => {
@@ -136,17 +132,7 @@ const handleGoToPlanning = () => {
   activeMode.value = 'planning'
 }
 
-const handlePreferencesUpdated = async (newSignals: PreferenceSignal[]) => {
-  // Show toast for new signals
-  for (const signal of newSignals) {
-    pendingToasts.value.push({
-      category: signal.category,
-      tag: signal.tag,
-      weight: signal.weight,
-      is_new: true,
-    })
-  }
-
+const handlePreferencesUpdated = async (_newSignals: PreferenceSignal[]) => {
   // Refresh user profile
   if (user.value) {
     try {
@@ -157,10 +143,6 @@ const handlePreferencesUpdated = async (newSignals: PreferenceSignal[]) => {
       console.error('Failed to refresh user profile:', error)
     }
   }
-}
-
-const clearToasts = () => {
-  pendingToasts.value = []
 }
 
 const showProfile = () => {
@@ -238,8 +220,6 @@ onMounted(() => {
           </div>
         </main>
 
-        <!-- Toast notifications for learned preferences -->
-        <PreferenceToast :preferences="pendingToasts" @clear="clearToasts" />
       </div>
 
       <!-- Profile Modal -->

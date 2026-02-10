@@ -19,6 +19,13 @@ interface Message {
   content: string
 }
 
+interface InlineSignal {
+  category: string
+  tag: string
+  weight: number
+  visible: boolean
+}
+
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
@@ -29,6 +36,23 @@ const inputMessage = ref('')
 const messagesContainer = ref<HTMLElement | null>(null)
 const isInitialized = ref(false)
 const isComposing = ref(false)
+
+// メッセージごとの学習済み嗜好
+const messageSignals = ref<Map<number, InlineSignal[]>>(new Map())
+
+const signalCategoryIcon: Record<string, string> = {
+  likes: '♥',
+  dislikes: '✗',
+  experience_axis: '◈',
+  constraints: '⚙',
+}
+
+const signalCategoryLabel: Record<string, string> = {
+  likes: 'Like',
+  dislikes: 'Dislike',
+  experience_axis: 'Experience',
+  constraints: 'Constraint',
+}
 
 const handleCompositionStart = () => {
   isComposing.value = true
@@ -61,11 +85,42 @@ const formatMessage = (content: string): string => {
     .replace(/\n/g, '<br>')
 }
 
+const showScrollArrow = ref(false)
+
 const scrollToBottom = async () => {
   await nextTick()
   if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    messagesContainer.value.scrollTo({
+      top: messagesContainer.value.scrollHeight,
+      behavior: 'smooth',
+    })
   }
+}
+
+const scrollToMessage = async (messageIndex: number) => {
+  await nextTick()
+  if (!messagesContainer.value) return
+  const els = messagesContainer.value.querySelectorAll('.messages-wrapper > .message')
+  const target = els[messageIndex] as HTMLElement | undefined
+  if (target) {
+    const containerTop = messagesContainer.value.getBoundingClientRect().top
+    const targetTop = target.getBoundingClientRect().top
+    const offset = targetTop - containerTop + messagesContainer.value.scrollTop
+    messagesContainer.value.scrollTo({ top: offset, behavior: 'smooth' })
+  }
+}
+
+const checkScrollArrow = () => {
+  if (!messagesContainer.value) {
+    showScrollArrow.value = false
+    return
+  }
+  const { scrollTop, scrollHeight, clientHeight } = messagesContainer.value
+  showScrollArrow.value = scrollHeight - scrollTop - clientHeight > 80
+}
+
+const onContainerScroll = () => {
+  checkScrollArrow()
 }
 
 const initializeChat = async () => {
@@ -80,7 +135,8 @@ const initializeChat = async () => {
       content: response.assistant_message,
     }]
     isInitialized.value = true
-    await scrollToBottom()
+    await nextTick()
+    checkScrollArrow()
   } catch (error) {
     console.error('Failed to initialize preference learning chat:', error)
     messages.value = [{
@@ -101,11 +157,11 @@ const sendMessage = async () => {
   const userMessage = inputMessage.value.trim()
   inputMessage.value = ''
 
+  const userMessageIndex = messages.value.length
   messages.value.push({
     role: 'user',
     content: userMessage,
   })
-  await scrollToBottom()
 
   try {
     isLoading.value = true
@@ -116,7 +172,9 @@ const sendMessage = async () => {
       content: '',
     })
     streamingMessageIndex.value = messages.value.length - 1
-    await scrollToBottom()
+
+    // ユーザーメッセージを画面トップにスクロール
+    await scrollToMessage(userMessageIndex)
 
     await api.sendMessageStream(
       props.user.id,
@@ -125,18 +183,36 @@ const sendMessage = async () => {
       (content: string) => {
         if (streamingMessageIndex.value >= 0) {
           messages.value[streamingMessageIndex.value].content += content
-          scrollToBottom()
+          // 自動追尾しない。矢印の表示判定のみ更新
+          nextTick(() => checkScrollArrow())
         }
       },
       (signals) => {
         if (signals && signals.length > 0) {
           emit('preferences-updated', signals)
+          // メッセージにインライン表示用のシグナルを紐付け
+          const msgIdx = streamingMessageIndex.value
+          if (msgIdx >= 0) {
+            const existing = messageSignals.value.get(msgIdx) || []
+            const newSignals = signals.map(s => ({
+              category: s.category,
+              tag: s.tag,
+              weight: s.weight,
+              visible: false,
+            }))
+            messageSignals.value.set(msgIdx, [...existing, ...newSignals])
+            // 時差で表示アニメーション
+            newSignals.forEach((sig, i) => {
+              setTimeout(() => { sig.visible = true }, (existing.length + i) * 150)
+            })
+          }
         }
       },
       (newSessionId: string) => {
         sessionId.value = newSessionId
         isStreaming.value = false
         streamingMessageIndex.value = -1
+        nextTick(() => checkScrollArrow())
       },
       (error: string) => {
         console.error('Streaming error:', error)
@@ -157,11 +233,11 @@ const sendMessage = async () => {
         content: `エラー: ${getErrorMessage(error)}`,
       })
     }
-    await scrollToBottom()
     isStreaming.value = false
     streamingMessageIndex.value = -1
   } finally {
     isLoading.value = false
+    nextTick(() => checkScrollArrow())
   }
 }
 
@@ -180,123 +256,143 @@ onMounted(() => {
 
 <template>
   <div class="preference-learning-view">
-    <!-- 左サイドバー -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <button class="back-btn" @click="$emit('back-to-select')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="15 18 9 12 15 6"/>
-          </svg>
-          戻る
-        </button>
-      </div>
-
-      <div class="sidebar-content">
-        <div class="mode-info">
-          <div class="mode-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
-            </svg>
-          </div>
-          <h2>嗜好学習</h2>
-          <p class="mode-subtitle">Preference Learning</p>
-        </div>
-
-        <div class="info-section">
-          <h3>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="16" x2="12" y2="12"/>
-              <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-            このモードについて
-          </h3>
-          <p>
-            AIとの自然な対話を通じて、あなたの旅行の好みを学習します。
-            食事、アクティビティ、宿泊施設など、様々な観点から好みを把握します。
-          </p>
-        </div>
-
-        <div class="tips-section">
-          <h3>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-            </svg>
-            話題の例
-          </h3>
-          <ul>
-            <li>好きな料理・苦手な食べ物</li>
-            <li>旅行のペース（ゆっくり or アクティブ）</li>
-            <li>興味のあるアクティビティ</li>
-            <li>宿泊施設の好み</li>
-            <li>予算感・旅行スタイル</li>
-          </ul>
-        </div>
-      </div>
-
-      <div class="sidebar-footer">
-        <button class="action-btn" @click="$emit('go-to-planning')">
-          <span>旅行企画へ進む</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="5" y1="12" x2="19" y2="12"/>
-            <polyline points="12 5 19 12 12 19"/>
-          </svg>
-        </button>
-      </div>
-    </aside>
-
     <!-- メインチャットエリア -->
     <main class="chat-main">
       <div class="chat-header">
-        <div class="chat-title">
-          <h3>AIとの対話</h3>
-          <p>旅行の好みについて教えてください</p>
+        <div class="header-left">
+          <button class="header-back-btn" @click="$emit('back-to-select')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            <span>戻る</span>
+          </button>
+          <div class="header-divider"></div>
+          <div class="header-title">
+            <h3>嗜好学習</h3>
+            <span class="header-subtitle">AIとの対話で好みを学習</span>
+          </div>
         </div>
-        <div class="chat-status" :class="{ active: isLoading }">
-          <span class="status-dot"></span>
-          <span>{{ isLoading ? '応答中...' : 'オンライン' }}</span>
-        </div>
+        <button class="header-planning-btn" @click="$emit('go-to-planning')">
+          <span>旅行企画へ進む</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
       </div>
 
-      <div class="messages-container" ref="messagesContainer">
+      <div class="messages-area">
+      <div class="messages-container" ref="messagesContainer" @scroll="onContainerScroll">
         <div class="messages-wrapper">
           <div
             v-for="(message, index) in messages"
             :key="index"
-            :class="['message', message.role]"
+            :class="['message', message.role, 'message-enter']"
+            :style="{ animationDelay: index * 0.05 + 's' }"
           >
-            <div class="message-avatar">
-              <svg v-if="message.role === 'assistant'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-              </svg>
-              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                <circle cx="12" cy="7" r="4"/>
-              </svg>
+            <!-- アバターエリア（思考中はリング付き） -->
+            <div class="avatar-area" :class="{ 'is-thinking': isStreaming && index === streamingMessageIndex && !message.content }">
+              <template v-if="isStreaming && index === streamingMessageIndex && !message.content">
+                <div class="avatar-ring ring-1"></div>
+                <div class="avatar-ring ring-2"></div>
+                <div class="avatar-ring ring-3"></div>
+              </template>
+              <div class="message-avatar">
+                <template v-if="message.role === 'assistant'">
+                  <img :src="'/ylab-logo.png'" alt="Ylab" class="avatar-logo" @error="($event.target as HTMLImageElement).style.display='none'" />
+                  <svg class="avatar-logo-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                  </svg>
+                </template>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                  <circle cx="12" cy="7" r="4"/>
+                </svg>
+              </div>
             </div>
+
             <div class="message-content">
               <div class="message-meta">
                 <span class="message-sender">{{ message.role === 'assistant' ? 'Travel AI' : 'あなた' }}</span>
               </div>
-              <div class="message-text" v-html="formatMessage(message.content)"></div>
+              <!-- 思考中UI -->
+              <div v-if="isStreaming && index === streamingMessageIndex && !message.content" class="thinking-card">
+                <div class="thinking-flow">
+                  <div class="thinking-flow-layer flow-1"></div>
+                  <div class="thinking-flow-layer flow-2"></div>
+                  <div class="thinking-flow-layer flow-3"></div>
+                </div>
+                <div class="thinking-body">
+                  <span class="thinking-label">Thinking<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span></span>
+                  <div class="thinking-shimmer-track"><div class="thinking-shimmer-bar"></div></div>
+                </div>
+              </div>
+              <!-- 通常メッセージ -->
+              <div v-else class="message-bubble">
+                <div class="message-text" v-html="formatMessage(message.content)"></div>
+              </div>
+              <!-- 学習した嗜好シグナル（インライン表示） -->
+              <div v-if="message.role === 'assistant' && messageSignals.get(index)?.length" class="learned-signals">
+                <TransitionGroup name="signal">
+                  <span
+                    v-for="(sig, si) in messageSignals.get(index)"
+                    :key="si"
+                    :class="['signal-chip', sig.category, { 'signal-visible': sig.visible }]"
+                  >
+                    <span class="signal-icon">{{ signalCategoryIcon[sig.category] || '✦' }}</span>
+                    <span class="signal-category">{{ signalCategoryLabel[sig.category] || 'Learned' }}</span>
+                    <span class="signal-tag">{{ sig.tag }}</span>
+                  </span>
+                </TransitionGroup>
+              </div>
             </div>
           </div>
 
-          <div v-if="isLoading && !isStreaming" class="message assistant">
-            <div class="message-avatar">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-              </svg>
+          <!-- 初回ロード時の思考中（ストリーミング前） -->
+          <div v-if="isLoading && !isStreaming" class="message assistant message-enter">
+            <div class="avatar-area is-thinking">
+              <div class="avatar-ring ring-1"></div>
+              <div class="avatar-ring ring-2"></div>
+              <div class="avatar-ring ring-3"></div>
+              <div class="message-avatar">
+                <img :src="'/ylab-logo.png'" alt="Ylab" class="avatar-logo" @error="($event.target as HTMLImageElement).style.display='none'" />
+                <svg class="avatar-logo-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                </svg>
+              </div>
             </div>
             <div class="message-content">
-              <div class="typing-indicator">
-                <span></span>
-                <span></span>
-                <span></span>
+              <div class="message-meta">
+                <span class="message-sender">Travel AI</span>
+              </div>
+              <div class="thinking-card">
+                <div class="thinking-flow">
+                  <div class="thinking-flow-layer flow-1"></div>
+                  <div class="thinking-flow-layer flow-2"></div>
+                  <div class="thinking-flow-layer flow-3"></div>
+                </div>
+                <div class="thinking-body">
+                  <span class="thinking-label">Thinking<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span></span>
+                  <div class="thinking-shimmer-track"><div class="thinking-shimmer-bar"></div></div>
+                </div>
               </div>
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- 下にスクロールする矢印 -->
+      <Transition name="arrow-fade">
+        <button
+          v-if="showScrollArrow"
+          class="scroll-arrow-btn"
+          @click="scrollToBottom"
+          aria-label="最下部へスクロール"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+      </Transition>
       </div>
 
       <div class="input-area">
@@ -336,199 +432,10 @@ onMounted(() => {
 
 .preference-learning-view {
   display: flex;
-  height: 100%;
-  min-height: 600px;
-}
-
-/* サイドバー */
-.sidebar {
-  width: 320px;
-  display: flex;
   flex-direction: column;
-  background: rgba(102, 126, 234, 0.03);
-  border-right: 1px solid rgba(102, 126, 234, 0.1);
-  flex-shrink: 0;
-}
-
-.sidebar-header {
-  padding: 1.25rem 1.5rem;
-  border-bottom: 1px solid rgba(102, 126, 234, 0.08);
-}
-
-.back-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: transparent;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 8px;
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: #4a5568;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.back-btn:hover {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-.back-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
-.sidebar-content {
-  flex: 1;
-  padding: 1.5rem;
-  overflow-y: auto;
-}
-
-.mode-info {
-  text-align: center;
-  padding-bottom: 1.5rem;
-  border-bottom: 1px solid rgba(102, 126, 234, 0.1);
-  margin-bottom: 1.5rem;
-}
-
-.mode-icon {
-  width: 60px;
-  height: 60px;
-  margin: 0 auto 1rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
-  border-radius: 16px;
-  color: #667eea;
-}
-
-.mode-icon svg {
-  width: 30px;
-  height: 30px;
-}
-
-.mode-info h2 {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 1.3rem;
-  font-weight: 700;
-  color: #1a202c;
-  margin: 0 0 0.25rem;
-}
-
-.mode-subtitle {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.7rem;
-  font-weight: 500;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: #a0aec0;
-  margin: 0;
-}
-
-.info-section,
-.tips-section {
-  margin-bottom: 1.5rem;
-}
-
-.info-section h3,
-.tips-section h3 {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #4a5568;
-  margin: 0 0 0.75rem;
-}
-
-.info-section h3 svg,
-.tips-section h3 svg {
-  width: 16px;
-  height: 16px;
-  color: #667eea;
-}
-
-.info-section p {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: #718096;
-  margin: 0;
-}
-
-.tips-section ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.tips-section li {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.8rem;
-  color: #718096;
-  padding: 0.5rem 0;
-  padding-left: 1.25rem;
-  position: relative;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
-}
-
-.tips-section li:last-child {
-  border-bottom: none;
-}
-
-.tips-section li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 6px;
-  height: 6px;
-  background: #667eea;
-  border-radius: 50%;
-  opacity: 0.5;
-}
-
-.sidebar-footer {
-  padding: 1.25rem 1.5rem;
-  border-top: 1px solid rgba(102, 126, 234, 0.08);
-}
-
-.action-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 0.875rem 1.25rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border: none;
-  border-radius: 12px;
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: white;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.action-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
-}
-
-.action-btn svg {
-  width: 18px;
-  height: 18px;
-  transition: transform 0.3s ease;
-}
-
-.action-btn:hover svg {
-  transform: translateX(4px);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* メインチャットエリア */
@@ -536,78 +443,222 @@ onMounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   min-width: 0;
 }
 
+/* ======== ヘッダー ======== */
 .chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1.25rem 2rem;
+  padding: 1rem 2rem;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  flex-shrink: 0;
 }
 
-.chat-title h3 {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #1a202c;
-  margin: 0 0 0.2rem;
-}
-
-.chat-title p {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.8rem;
-  color: #718096;
-  margin: 0;
-}
-
-.chat-status {
+.header-left {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
-  background: rgba(72, 187, 120, 0.1);
-  border-radius: 20px;
+  gap: 1rem;
+}
+
+.header-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem 0.5rem 0.5rem;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
   font-family: 'Montserrat', sans-serif;
-  font-size: 0.75rem;
+  font-size: 0.82rem;
   font-weight: 500;
-  color: #276749;
+  color: #718096;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 
-.chat-status.active {
-  background: rgba(102, 126, 234, 0.1);
-  color: #5a67d8;
+.header-back-btn:hover {
+  color: #4a5568;
+  background: rgba(0, 0, 0, 0.04);
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
-  background: #48bb78;
-  border-radius: 50%;
-  animation: pulse-dot 2s infinite;
+.header-back-btn svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.2s ease;
 }
 
-.chat-status.active .status-dot {
-  background: #667eea;
+.header-back-btn:hover svg {
+  transform: translateX(-2px);
 }
 
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+.header-divider {
+  width: 1px;
+  height: 28px;
+  background: rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+}
+
+.header-title h3 {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1a202c;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.header-subtitle {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: #a0aec0;
+  letter-spacing: 0.02em;
+}
+
+.header-planning-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1rem;
+  background: transparent;
+  border: 1.5px solid rgba(102, 126, 234, 0.3);
+  border-radius: 10px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #667eea;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.header-planning-btn:hover {
+  background: rgba(102, 126, 234, 0.06);
+  border-color: rgba(102, 126, 234, 0.5);
+  box-shadow: 0 2px 10px rgba(102, 126, 234, 0.12);
+}
+
+.header-planning-btn svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.25s ease;
+  stroke: #667eea;
+}
+
+.header-planning-btn:hover svg {
+  transform: translateX(2px);
+}
+
+/* ======== メッセージエリア ======== */
+.messages-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .messages-container {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 1.5rem 2rem;
+  padding: 2rem 2rem;
+}
+
+/* 下スクロール矢印 */
+.scroll-arrow-btn {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  border-radius: 50%;
+  color: #667eea;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(102, 126, 234, 0.05);
+}
+
+.scroll-arrow-btn:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(102, 126, 234, 0.4);
+  box-shadow:
+    0 6px 20px rgba(102, 126, 234, 0.15),
+    0 0 0 1px rgba(102, 126, 234, 0.1);
+  transform: translateX(-50%) translateY(-2px);
+}
+
+.scroll-arrow-btn svg {
+  width: 20px;
+  height: 20px;
+  animation: arrow-bounce 2s ease-in-out infinite;
+}
+
+@keyframes arrow-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+
+/* 矢印のフェードイン/アウト */
+.arrow-fade-enter-active {
+  transition: all 0.25s ease-out;
+}
+
+.arrow-fade-leave-active {
+  transition: all 0.2s ease-in;
+}
+
+.arrow-fade-enter-from {
+  opacity: 0;
+  transform: translateX(-50%) translateY(10px);
+}
+
+.arrow-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(10px);
 }
 
 .messages-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.75rem;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+/* メッセージ入場アニメーション */
+.message-enter {
+  animation: msg-slide-in 0.35s ease-out both;
+}
+
+@keyframes msg-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .message {
@@ -621,35 +672,101 @@ onMounted(() => {
   flex-direction: row-reverse;
 }
 
+/* アバターエリア（リングのコンテナ） */
+.avatar-area {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
 .message-avatar {
-  width: 40px;
-  height: 40px;
+  position: relative;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: 50%;
   flex-shrink: 0;
+  overflow: hidden;
+  z-index: 2;
 }
 
 .message.assistant .message-avatar {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(118, 75, 162, 0.12) 100%);
+  border: 1px solid rgba(102, 126, 234, 0.1);
+}
+
+.is-thinking .message-avatar {
+  box-shadow: 0 0 12px rgba(102, 126, 234, 0.25);
+}
+
+.avatar-logo {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+.avatar-logo-fallback {
+  width: 22px;
+  height: 22px;
   color: #667eea;
 }
 
+.avatar-logo:not([style*="display: none"]) + .avatar-logo-fallback {
+  display: none;
+}
+
 .message.user .message-avatar {
-  background: rgba(0, 0, 0, 0.06);
-  color: #4a5568;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%);
+  border: 1px solid rgba(102, 126, 234, 0.08);
+  color: #667eea;
 }
 
 .message-avatar svg {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
+}
+
+/* アバター周囲のパルスリング */
+.avatar-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(102, 126, 234, 0.3);
+  z-index: 1;
+}
+
+.ring-1 {
+  animation: ring-pulse 2.4s ease-out infinite;
+}
+
+.ring-2 {
+  animation: ring-pulse 2.4s ease-out 0.8s infinite;
+}
+
+.ring-3 {
+  animation: ring-pulse 2.4s ease-out 1.6s infinite;
+}
+
+@keyframes ring-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
 }
 
 .message-content {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 .message-meta {
@@ -662,71 +779,329 @@ onMounted(() => {
   font-family: 'Montserrat', sans-serif;
   font-size: 0.75rem;
   font-weight: 600;
-  color: #4a5568;
+  color: #718096;
+  letter-spacing: 0.02em;
+}
+
+/* メッセージバブル */
+.message-bubble {
+  position: relative;
 }
 
 .message-text {
-  padding: 1rem 1.25rem;
-  border-radius: 16px;
+  padding: 1.1rem 1.4rem;
+  border-radius: 20px;
   font-family: 'Montserrat', sans-serif;
-  font-size: 0.9rem;
-  line-height: 1.6;
+  font-size: 0.92rem;
+  line-height: 1.75;
+  word-break: break-word;
 }
 
 .message.assistant .message-text {
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   color: #2d3748;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-top-left-radius: 4px;
+  border: 1px solid rgba(102, 126, 234, 0.1);
+  border-radius: 4px 20px 20px 20px;
+  box-shadow:
+    0 1px 3px rgba(102, 126, 234, 0.06),
+    0 4px 16px rgba(102, 126, 234, 0.04);
+  transition: box-shadow 0.3s ease;
+}
+
+.message.assistant .message-text:hover {
+  box-shadow:
+    0 2px 6px rgba(102, 126, 234, 0.1),
+    0 8px 24px rgba(102, 126, 234, 0.06);
 }
 
 .message.user .message-text {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  border-top-right-radius: 4px;
+  border-radius: 20px 4px 20px 20px;
+  box-shadow:
+    0 2px 8px rgba(102, 126, 234, 0.2),
+    0 4px 20px rgba(118, 75, 162, 0.15);
+  transition: box-shadow 0.3s ease;
 }
 
-.typing-indicator {
+.message.user .message-text:hover {
+  box-shadow:
+    0 4px 12px rgba(102, 126, 234, 0.3),
+    0 8px 28px rgba(118, 75, 162, 0.2);
+}
+
+.message.user .message-sender {
+  text-align: right;
+}
+
+/* ======== 学習シグナル（インライン） ======== */
+.learned-signals {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  padding: 0.5rem 0;
+  margin-top: 8px;
+  padding-left: 2px;
 }
 
-.typing-indicator span {
-  width: 8px;
-  height: 8px;
-  background: #a0aec0;
+.signal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px 4px 8px;
+  border-radius: 20px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.75rem;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(102, 126, 234, 0.12);
+  box-shadow: 0 1px 4px rgba(102, 126, 234, 0.06);
+  opacity: 0;
+  transform: translateY(6px) scale(0.92);
+  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 0.25s ease;
+}
+
+.signal-chip.signal-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.signal-chip:hover {
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.14);
+}
+
+.signal-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  animation: bounce 1.4s infinite ease-in-out both;
+  font-size: 0.6rem;
+  flex-shrink: 0;
 }
 
-.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0); }
-  40% { transform: scale(1); }
+.signal-chip.likes .signal-icon {
+  background: linear-gradient(135deg, #667eea, #a78bfa);
+  color: white;
 }
 
-/* 入力エリア */
+.signal-chip.dislikes .signal-icon {
+  background: linear-gradient(135deg, #fda4af, #f472b6);
+  color: white;
+}
+
+.signal-chip.experience_axis .signal-icon {
+  background: linear-gradient(135deg, #818cf8, #764ba2);
+  color: white;
+}
+
+.signal-chip.constraints .signal-icon {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  color: white;
+}
+
+.signal-category {
+  font-weight: 500;
+  opacity: 0.45;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.signal-tag {
+  font-weight: 600;
+  color: #2d3748;
+}
+
+.signal-chip.likes { border-color: rgba(102, 126, 234, 0.18); }
+.signal-chip.dislikes { border-color: rgba(244, 114, 182, 0.18); }
+.signal-chip.experience_axis { border-color: rgba(129, 140, 248, 0.18); }
+.signal-chip.constraints { border-color: rgba(251, 191, 36, 0.18); }
+
+/* signal transition group */
+.signal-enter-active {
+  transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.signal-leave-active {
+  transition: all 0.25s ease;
+}
+
+.signal-enter-from {
+  opacity: 0;
+  transform: translateY(8px) scale(0.9);
+}
+
+.signal-leave-to {
+  opacity: 0;
+  transform: scale(0.9);
+}
+
+/* ======== 思考中インジケーター ======== */
+.thinking-card {
+  position: relative;
+  padding: 1rem 1.4rem;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(102, 126, 234, 0.12);
+  border-radius: 18px;
+  border-top-left-radius: 4px;
+  box-shadow:
+    0 4px 24px rgba(102, 126, 234, 0.08),
+    0 1px 4px rgba(0, 0, 0, 0.03);
+  overflow: hidden;
+}
+
+/* 流れるグラデーション背景 */
+.thinking-flow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.thinking-flow-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.flow-1 {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(102, 126, 234, 0.1) 20%,
+    rgba(118, 75, 162, 0.14) 40%,
+    rgba(102, 126, 234, 0.1) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: flow-sweep 3s ease-in-out infinite;
+}
+
+.flow-2 {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(118, 75, 162, 0.08) 30%,
+    rgba(102, 126, 234, 0.12) 50%,
+    rgba(118, 75, 162, 0.08) 70%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: flow-sweep 3s ease-in-out 1s infinite;
+}
+
+.flow-3 {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(102, 126, 234, 0.06) 25%,
+    rgba(167, 139, 250, 0.1) 50%,
+    rgba(102, 126, 234, 0.06) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: flow-sweep 3s ease-in-out 2s infinite;
+}
+
+@keyframes flow-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* カード内コンテンツ */
+.thinking-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.thinking-label {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+
+.thinking-dots span {
+  -webkit-text-fill-color: #667eea;
+  animation: dot-fade 1.4s ease-in-out infinite;
+}
+
+.thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dot-fade {
+  0%, 60%, 100% { opacity: 0; }
+  30% { opacity: 1; }
+}
+
+/* シマーバー */
+.thinking-shimmer-track {
+  width: 120px;
+  height: 3px;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.thinking-shimmer-bar {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(102, 126, 234, 0.5) 25%,
+    rgba(118, 75, 162, 0.7) 50%,
+    rgba(102, 126, 234, 0.5) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: 2px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ======== 入力エリア ======== */
 .input-area {
-  padding: 1.25rem 2rem;
+  padding: 1.25rem 2rem 1.5rem;
+  flex-shrink: 0;
 }
 
 .input-container {
   display: flex;
   align-items: center;
   gap: 1rem;
-  padding: 0.75rem 1rem;
-  background: rgba(255, 255, 255, 0.8);
+  padding: 0.85rem 1.1rem;
+  background: rgba(255, 255, 255, 0.85);
   border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 16px;
+  border-radius: 18px;
   transition: all 0.3s ease;
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 .input-container:focus-within {
   border-color: rgba(102, 126, 234, 0.4);
-  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.08);
 }
 
 .input-container textarea {
@@ -763,14 +1138,14 @@ onMounted(() => {
 }
 
 .send-btn {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border: none;
-  border-radius: 12px;
+  border-radius: 14px;
   color: white;
   cursor: pointer;
   transition: all 0.3s ease;
@@ -778,7 +1153,7 @@ onMounted(() => {
 
 .send-btn:hover:not(:disabled) {
   transform: scale(1.05);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  box-shadow: 0 4px 14px rgba(102, 126, 234, 0.35);
 }
 
 .send-btn:disabled {
@@ -791,9 +1166,46 @@ onMounted(() => {
   height: 20px;
 }
 
-/* レスポンシブ */
-@media (max-width: 900px) {
-  .sidebar {
+/* ======== レスポンシブ ======== */
+@media (max-width: 600px) {
+  .chat-header {
+    padding: 0.75rem 1rem;
+  }
+
+  .header-title h3 {
+    font-size: 0.9rem;
+  }
+
+  .header-subtitle {
+    display: none;
+  }
+
+  .header-divider {
+    display: none;
+  }
+
+  .header-back-btn span {
+    display: none;
+  }
+
+  .header-back-btn {
+    padding: 0.4rem;
+  }
+
+  .header-planning-btn {
+    font-size: 0.75rem;
+    padding: 0.45rem 0.7rem;
+  }
+
+  .messages-container {
+    padding: 1.25rem 1rem;
+  }
+
+  .input-area {
+    padding: 1rem 1rem 1.25rem;
+  }
+
+  .input-hint {
     display: none;
   }
 }
