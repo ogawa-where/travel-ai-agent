@@ -164,7 +164,7 @@ class TestGenerateMatchReasons:
         # 完全一致が必要なので、descriptionかtagsに含まれるキーワードを使う
         wishes = TravelWishes(activities=["寺院巡り"])
         reasons = agent._generate_match_reasons(candidate, wishes)
-        assert any("寺院巡り" in r for r in reasons)
+        assert any(r["text"] == "寺院巡り" and r["type"] == "wish" for r in reasons)
 
     def test_experience_match(self):
         """体験マッチ"""
@@ -178,7 +178,7 @@ class TestGenerateMatchReasons:
         )
         wishes = TravelWishes(experiences=["茶道体験"])
         reasons = agent._generate_match_reasons(candidate, wishes)
-        assert any("茶道体験" in r for r in reasons)
+        assert any(r["text"] == "茶道体験" and r["type"] == "wish" for r in reasons)
 
     def test_food_match(self):
         """食マッチ"""
@@ -192,7 +192,7 @@ class TestGenerateMatchReasons:
         )
         wishes = TravelWishes(food_preferences=["和食"])
         reasons = agent._generate_match_reasons(candidate, wishes)
-        assert any("和食" in r for r in reasons)
+        assert any(r["text"] == "和食" and r["type"] == "wish" for r in reasons)
 
     def test_mood_match(self):
         """雰囲気マッチ"""
@@ -206,7 +206,7 @@ class TestGenerateMatchReasons:
         )
         wishes = TravelWishes(mood="ゆったり")
         reasons = agent._generate_match_reasons(candidate, wishes)
-        assert any("ゆったり" in r for r in reasons)
+        assert any(r["text"] == "ゆったり" and r["type"] == "wish" for r in reasons)
 
     def test_max_3_reasons(self):
         """理由は最大3つ"""
@@ -223,7 +223,7 @@ class TestGenerateMatchReasons:
             food_preferences=["和食"],
         )
         reasons = agent._generate_match_reasons(candidate, wishes)
-        assert len(reasons) <= 3
+        assert len(reasons) <= 4
 
     def test_no_match(self):
         """マッチなし"""
@@ -238,6 +238,87 @@ class TestGenerateMatchReasons:
         wishes = TravelWishes(activities=["スキー"])
         reasons = agent._generate_match_reasons(candidate, wishes)
         assert reasons == []
+
+    def test_wish_embedding_fallback(self):
+        """文字列不一致でも埋め込み類似度が高ければ wish ラベルが付く"""
+        agent = RerankAgent()
+        candidate = POISearchResult(
+            name="伏見稲荷大社",
+            category=POICategory.ACTIVITY,
+            description="千本鳥居で有名な稲荷神社",
+            tags=["神社", "鳥居"],
+            relevance_score=0.8,
+        )
+        # "神社巡り" は description/tags にそのまま含まれない
+        wishes = TravelWishes(activities=["神社巡り"])
+
+        # 候補埋め込みと wish 埋め込みを用意（高い類似度になるよう近いベクトル）
+        candidate_embedding = [0.8, 0.6, 0.0]
+        wish_embeddings = [("神社巡り", [0.7, 0.7, 0.1])]
+
+        reasons = agent._generate_match_reasons(
+            candidate,
+            wishes,
+            preference_signals=None,
+            candidate_embedding=candidate_embedding,
+            wish_embeddings=wish_embeddings,
+        )
+
+        assert any(r["text"] == "神社巡り" and r["type"] == "wish" for r in reasons)
+
+    def test_wish_embedding_no_false_positive(self):
+        """埋め込み類似度が低い場合はマッチしない"""
+        agent = RerankAgent()
+        candidate = POISearchResult(
+            name="海鮮レストラン",
+            category=POICategory.FOOD,
+            description="新鮮な海の幸を使った料理",
+            tags=["海鮮", "レストラン"],
+            relevance_score=0.8,
+        )
+        wishes = TravelWishes(activities=["スキー"])
+
+        # 直交に近いベクトル → 低類似度
+        candidate_embedding = [1.0, 0.0, 0.0]
+        wish_embeddings = [("スキー", [0.0, 0.0, 1.0])]
+
+        reasons = agent._generate_match_reasons(
+            candidate,
+            wishes,
+            preference_signals=None,
+            candidate_embedding=candidate_embedding,
+            wish_embeddings=wish_embeddings,
+        )
+
+        assert not any(r["text"] == "スキー" for r in reasons)
+
+    def test_wish_embedding_skips_already_matched(self):
+        """文字列マッチ済みの wish は埋め込みフォールバックをスキップ"""
+        agent = RerankAgent()
+        candidate = POISearchResult(
+            name="温泉旅館",
+            category=POICategory.HOTEL,
+            description="露天風呂付きの温泉旅館",
+            tags=["温泉"],
+            relevance_score=0.8,
+        )
+        wishes = TravelWishes(activities=["温泉"])
+
+        # "温泉" は文字列マッチする。埋め込みでも高類似度だが重複しない
+        candidate_embedding = [0.9, 0.1, 0.0]
+        wish_embeddings = [("温泉", [0.9, 0.1, 0.0])]
+
+        reasons = agent._generate_match_reasons(
+            candidate,
+            wishes,
+            preference_signals=None,
+            candidate_embedding=candidate_embedding,
+            wish_embeddings=wish_embeddings,
+        )
+
+        # "温泉" が1回だけ含まれる
+        wish_reasons = [r for r in reasons if r["text"] == "温泉"]
+        assert len(wish_reasons) == 1
 
 
 # =============================================================================

@@ -151,6 +151,40 @@ class RerankAgent:
             # 空の埋め込みを返す（フォールバック）
             return []
 
+    async def _compute_wish_embeddings(
+        self, wishes: TravelWishes
+    ) -> list[tuple[str, list[float]]]:
+        """wishes の各項目の埋め込みを事前計算
+
+        Returns:
+            list[tuple[str, list[float]]]: [(wish_text, embedding), ...]
+        """
+        wish_texts: list[str] = []
+        for activity in wishes.activities or []:
+            wish_texts.append(activity)
+        for experience in wishes.experiences or []:
+            wish_texts.append(experience)
+        for food in wishes.food_preferences or []:
+            wish_texts.append(food)
+        if wishes.mood:
+            wish_texts.append(wishes.mood)
+
+        if not wish_texts:
+            return []
+
+        embeddings = await asyncio.gather(
+            *[self._get_embedding(text) for text in wish_texts],
+            return_exceptions=True,
+        )
+
+        result: list[tuple[str, list[float]]] = []
+        for text, emb in zip(wish_texts, embeddings):
+            if isinstance(emb, Exception) or not emb:
+                continue
+            result.append((text, emb))
+
+        return result
+
     async def _score_candidates(
         self,
         candidates: list[POISearchResult],
@@ -161,6 +195,9 @@ class RerankAgent:
     ) -> list[POIRanked]:
         """候補をスコアリング（体験ベース）"""
         ranked_items = []
+
+        # wish 埋め込みを事前計算（1回だけ）
+        wish_embeddings = await self._compute_wish_embeddings(wishes)
 
         # 候補の埋め込みテキストを構築（体験ベース）
         candidate_texts = []
@@ -200,8 +237,17 @@ class RerankAgent:
             final_score = 0.4 * relevance_score + 0.6 * preference_score
 
             # マッチ理由を生成（長期嗜好と今回の要望を区別）
+            candidate_emb = (
+                embedding
+                if not isinstance(embedding, Exception) and embedding
+                else None
+            )
             match_reasons = self._generate_match_reasons(
-                candidate, wishes, preference_signals
+                candidate,
+                wishes,
+                preference_signals,
+                candidate_embedding=candidate_emb,
+                wish_embeddings=wish_embeddings,
             )
 
             ranked_items.append(
@@ -246,13 +292,19 @@ class RerankAgent:
         candidate: POISearchResult,
         wishes: TravelWishes,
         preference_signals: list[dict] | None = None,
+        candidate_embedding: list[float] | None = None,
+        wish_embeddings: list[tuple[str, list[float]]] | None = None,
     ) -> list[dict]:
         """マッチ理由を生成（長期嗜好と今回の要望を区別）
+
+        文字列部分一致で見つからなかった wish に対して、
+        埋め込みコサイン類似度でフォールバックマッチする。
 
         Returns:
             list[dict]: [{"text": "温泉好き", "type": "preference"}, {"text": "きりたんぽ", "type": "wish"}]
         """
-        reasons = []
+        reasons: list[dict] = []
+        seen_texts: set[str] = set()
 
         # タグとwishesの照合
         candidate_tags_lower = [t.lower() for t in (candidate.tags or [])]
@@ -269,22 +321,40 @@ class RerankAgent:
                     tag_lower = tag.lower()
                     if tag_lower and (tag_lower in description_lower or tag_lower in tags_text):
                         reasons.append({"text": tag, "type": "preference"})
+                        seen_texts.add(tag)
 
-        # 今回の要望（wishes）マッチ
+        # 今回の要望（wishes）マッチ — 文字列部分一致
         for activity in (wishes.activities or []):
             if activity.lower() in description_lower or activity.lower() in tags_text:
                 reasons.append({"text": activity, "type": "wish"})
+                seen_texts.add(activity)
 
         for experience in (wishes.experiences or []):
             if experience.lower() in description_lower:
                 reasons.append({"text": experience, "type": "wish"})
+                seen_texts.add(experience)
 
         for food in (wishes.food_preferences or []):
             if food.lower() in description_lower or food.lower() in tags_text:
                 reasons.append({"text": food, "type": "wish"})
+                seen_texts.add(food)
 
         if wishes.mood and wishes.mood.lower() in description_lower:
             reasons.append({"text": wishes.mood, "type": "wish"})
+            seen_texts.add(wishes.mood)
+
+        # 埋め込みフォールバック: 文字列一致しなかった wish を類似度で判定
+        if candidate_embedding and wish_embeddings:
+            for wish_text, wish_emb in wish_embeddings:
+                if wish_text in seen_texts:
+                    continue
+                if len(reasons) >= 4:
+                    break
+                similarity = self._cosine_similarity(candidate_embedding, wish_emb)
+                # 閾値 0.75（正規化後、raw cosine ≈ 0.5）
+                if similarity >= 0.75:
+                    reasons.append({"text": wish_text, "type": "wish"})
+                    seen_texts.add(wish_text)
 
         return reasons[:4]  # 最大4つ
 
