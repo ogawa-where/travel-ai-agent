@@ -26,7 +26,7 @@ interface Message {
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
-type Phase = 'form' | 'gathering' | 'ready' | 'planning' | 'result'
+type Phase = 'form' | 'confirm' | 'gathering' | 'ready' | 'planning' | 'result'
 const phase = ref<Phase>('form')
 
 const sessionId = ref<string | null>(null)
@@ -193,7 +193,15 @@ const handleFormSubmit = async (data: BasicTravelInfo) => {
     accommodation_type: data.accommodation_type || undefined,
     transportation: data.transportation || undefined,
   }
-  await startPlanGenerationFromForm()
+  phase.value = 'confirm'
+}
+
+const confirmAndStartPlanning = () => {
+  startPlanGenerationFromForm()
+}
+
+const backToForm = () => {
+  phase.value = 'form'
 }
 
 const sendGatheringMessage = async () => {
@@ -510,18 +518,23 @@ const formatCollectedInfo = computed(() => {
 
       <!-- フェーズインジケーター（中央） -->
       <div class="phase-indicator">
-        <div class="phase-item" :class="{ active: phase === 'form', completed: ['gathering', 'ready', 'planning', 'result'].includes(phase) }">
+        <div class="phase-item" :class="{ active: phase === 'form', completed: ['confirm', 'gathering', 'ready', 'planning', 'result'].includes(phase) }">
           <div class="phase-dot">1</div>
           <span>入力</span>
         </div>
+        <div class="phase-line" :class="{ active: ['confirm', 'gathering', 'ready', 'planning', 'result'].includes(phase) }"></div>
+        <div class="phase-item" :class="{ active: phase === 'confirm', completed: ['gathering', 'ready', 'planning', 'result'].includes(phase) }">
+          <div class="phase-dot">2</div>
+          <span>確認</span>
+        </div>
         <div class="phase-line" :class="{ active: ['gathering', 'ready', 'planning', 'result'].includes(phase) }"></div>
         <div class="phase-item" :class="{ active: phase === 'planning', completed: phase === 'result' }">
-          <div class="phase-dot">2</div>
+          <div class="phase-dot">3</div>
           <span>生成</span>
         </div>
         <div class="phase-line" :class="{ active: phase === 'result' }"></div>
         <div class="phase-item" :class="{ active: phase === 'result' }">
-          <div class="phase-dot">3</div>
+          <div class="phase-dot">4</div>
           <span>結果</span>
         </div>
       </div>
@@ -556,6 +569,101 @@ const formatCollectedInfo = computed(() => {
             @submit="handleFormSubmit"
           />
           <div v-else class="no-user-message">ログインしてください</div>
+        </div>
+      </div>
+
+      <!-- Phase 2: 確認画面 -->
+      <div v-else-if="phase === 'confirm'" class="confirm-phase">
+        <div class="confirm-layout">
+          <!-- 左カラム: 入力内容サマリー -->
+          <div class="confirm-card">
+            <h3 class="confirm-card-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+              入力内容
+            </h3>
+            <div class="confirm-summary">
+              <div v-for="item in formatCollectedInfo" :key="item.label" class="confirm-summary-item">
+                <span class="confirm-summary-label">{{ item.label }}</span>
+                <span class="confirm-summary-value">{{ item.value }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右カラム: 実行ステップ一覧 -->
+          <div class="confirm-card">
+            <h3 class="confirm-card-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              </svg>
+              実行ステップ
+            </h3>
+            <div class="step-list">
+              <div class="step-list-item">
+                <div class="step-number">1</div>
+                <div class="step-detail">
+                  <span class="step-title">準備</span>
+                  <span class="step-desc">入力情報の構造化</span>
+                </div>
+              </div>
+              <div class="step-list-item">
+                <div class="step-number">2</div>
+                <div class="step-detail">
+                  <span class="step-title">検索</span>
+                  <span class="step-desc">4カテゴリ並列検索（体験・食・宿・交通）</span>
+                </div>
+              </div>
+              <div class="step-list-item">
+                <div class="step-number">3</div>
+                <div class="step-detail">
+                  <span class="step-title">整理</span>
+                  <span class="step-desc">検索結果の正規化・重複排除</span>
+                </div>
+              </div>
+              <div class="step-list-item">
+                <div class="step-number">4</div>
+                <div class="step-detail">
+                  <span class="step-title">分析</span>
+                  <span class="step-desc">嗜好に基づくスコアリング</span>
+                </div>
+              </div>
+              <div class="step-list-item">
+                <div class="step-number">5</div>
+                <div class="step-detail">
+                  <span class="step-title">プラン作成</span>
+                  <span class="step-desc">旅程の自動生成</span>
+                </div>
+              </div>
+              <div class="step-list-item">
+                <div class="step-number">6</div>
+                <div class="step-detail">
+                  <span class="step-title">仕上げ</span>
+                  <span class="step-desc">プランの説明文生成</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- フッター: アクションボタン -->
+        <div class="confirm-actions">
+          <button class="confirm-back-btn" @click="backToForm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            戻る
+          </button>
+          <button class="confirm-start-btn" @click="confirmAndStartPlanning">
+            企画を開始する
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -1711,6 +1819,214 @@ const formatCollectedInfo = computed(() => {
   transform: translateX(100%);
 }
 
+/* ======== 確認フェーズ ======== */
+.confirm-phase {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 2rem 3rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.confirm-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  flex: 1;
+}
+
+.confirm-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(102, 126, 234, 0.1);
+  border-radius: 16px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.confirm-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1a202c;
+  margin: 0 0 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(102, 126, 234, 0.08);
+}
+
+.confirm-card-title svg {
+  width: 20px;
+  height: 20px;
+  color: #667eea;
+  flex-shrink: 0;
+}
+
+.confirm-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.confirm-summary-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.6rem 0.75rem;
+  background: rgba(102, 126, 234, 0.03);
+  border-radius: 8px;
+}
+
+.confirm-summary-label {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #718096;
+  flex-shrink: 0;
+  margin-right: 1rem;
+}
+
+.confirm-summary-value {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #2d3748;
+  text-align: right;
+}
+
+.step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.step-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.65rem 0.75rem;
+  background: rgba(102, 126, 234, 0.03);
+  border-radius: 10px;
+  transition: all 0.2s ease;
+}
+
+.step-list-item:hover {
+  background: rgba(102, 126, 234, 0.07);
+}
+
+.step-number {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(118, 75, 162, 0.12) 100%);
+  border-radius: 50%;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #667eea;
+  flex-shrink: 0;
+}
+
+.step-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.step-title {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #2d3748;
+}
+
+.step-desc {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.75rem;
+  color: #718096;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 1.5rem;
+  margin-top: 1rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  flex-shrink: 0;
+}
+
+.confirm-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.65rem 1.25rem;
+  background: transparent;
+  border: 1.5px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #718096;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.confirm-back-btn:hover {
+  color: #4a5568;
+  border-color: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.confirm-back-btn svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.2s ease;
+}
+
+.confirm-back-btn:hover svg {
+  transform: translateX(-2px);
+}
+
+.confirm-start-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.75rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 10px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: white;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: 0 2px 10px rgba(102, 126, 234, 0.25);
+}
+
+.confirm-start-btn:hover {
+  box-shadow: 0 4px 18px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+}
+
+.confirm-start-btn svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.2s ease;
+}
+
+.confirm-start-btn:hover svg {
+  transform: translateX(2px);
+}
+
 /* ======== レスポンシブ ======== */
 @media (max-width: 600px) {
   .chat-header {
@@ -1749,6 +2065,14 @@ const formatCollectedInfo = computed(() => {
   .header-new-plan-btn,
   .header-history-btn {
     padding: 0.45rem;
+  }
+
+  .confirm-phase {
+    padding: 1rem;
+  }
+
+  .confirm-layout {
+    grid-template-columns: 1fr;
   }
 
   .result-layout {

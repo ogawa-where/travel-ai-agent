@@ -175,7 +175,7 @@ const handleSubmit = () => {
                 v-model.number="budget"
                 type="number"
                 min="1000"
-                step="10000"
+                step="1"
                 placeholder="例: 50000"
                 required
                 :disabled="isLoading"
