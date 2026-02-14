@@ -143,21 +143,10 @@ class TavilyClient:
 
         query = f"{destination} {base_terms} {keyword_str}".strip()
 
-        # 旅行系ドメインを優先
-        include_domains = [
-            "tripadvisor.jp",
-            "jalan.net",
-            "ikyu.com",
-            "travel.rakuten.co.jp",
-            "rurubu.travel",
-            "jtb.co.jp",
-        ]
-
         return await self.search(
             query=query,
             search_depth="basic",
             max_results=max_results,
-            include_domains=include_domains,
         )
 
     async def _apply_rate_limit(self):
