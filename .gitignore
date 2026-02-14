@@ -56,3 +56,6 @@ config/ollama_workers.json
 
 # OSRM map data (large files)
 osrm-data/
+
+# Images (local assets)
+frontend/public/ylab-logo.png

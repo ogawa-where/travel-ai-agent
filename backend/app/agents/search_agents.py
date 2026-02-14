@@ -1110,6 +1110,7 @@ async def search_with_reasoning(
     search_routing = _load_search_routing()
 
     # デフォルトルーティング（設定がない場合）
+    # 検索フェーズでは全4サーバーが32Bモデルを使用
     import os
     search_model = os.getenv("OLLAMA_MODEL_HEAVY", "qwen2.5:32b-instruct")
     default_routing = {
@@ -1122,7 +1123,7 @@ async def search_with_reasoning(
             "model": search_model,
         },
         "hotel": {
-            "host": os.getenv("OLLAMA_WORKER_EMBED", "172.28.208.218:11434"),
+            "host": os.getenv("OLLAMA_WORKER_EMBED", "172.28.208.207:11434"),
             "model": search_model,
         },
         "transportation": {
@@ -1140,7 +1141,7 @@ async def search_with_reasoning(
         cat_key = category.value
         routing = search_routing.get(cat_key, default_routing.get(cat_key, {}))
         worker_host = routing.get("host", "localhost:11434")
-        model = routing.get("model", "qwen2.5:32b-instruct")
+        model = routing.get("model", search_model)
         hints = hints_per_category.get(cat_key, [])
 
         tasks.append(
@@ -1182,6 +1183,11 @@ async def search_with_reasoning(
             status.successful_categories.append(category_name)
             status.total_results += len(result.items)
             output[category] = result
+            if len(result.items) == 0:
+                logger.warning(
+                    f"Reasoning search returned 0 results for {category_name} "
+                    f"(search succeeded but no POIs extracted)"
+                )
 
     status.all_failed = len(status.failed_categories) == status.total_categories
     status.partial_failure = (
@@ -1195,9 +1201,17 @@ async def search_with_reasoning(
             f"Partial reasoning search failure: failed={status.failed_categories}"
         )
     else:
-        logger.info(
-            f"All reasoning search loops succeeded: total_results={status.total_results}"
-        )
+        empty_categories = [
+            cat.value for cat, res in output.items() if len(res.items) == 0
+        ]
+        if empty_categories:
+            logger.warning(
+                f"Reasoning search completed but {empty_categories} returned 0 results"
+            )
+        else:
+            logger.info(
+                f"All reasoning search loops succeeded: total_results={status.total_results}"
+            )
 
     return SearchAllResult(results=output, status=status)
 
