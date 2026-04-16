@@ -122,7 +122,7 @@ Explainer Agent ─── 根拠説明生成
 
 | 種類 | 説明 | 使用モデル | 配置サーバー |
 |------|------|-----------|-------------|
-| **Heavy LLM** | 複雑な推論・生成を行うエージェント。制約充足、旅程構成、根拠説明など高い言語能力が求められるタスクを担当。32Bクラスのモデルを使用するため同時実行は1。 | qwen2.5-bakeneko-32b | gpu-heavy |
+| **Heavy LLM** | 複雑な推論・生成を行うエージェント。制約充足、旅程構成、根拠説明など高い言語能力が求められるタスクを担当。32Bクラスのモデルを使用するため同時実行は1。 | qwen2.5:32b-instruct | gpu-heavy |
 | **Light LLM** | 要約・抽出・短文生成など比較的単純なLLMタスクを担当。応答速度を重視し、12Bクラスの軽量モデルで同時2つまで実行可能。 | gemma3:12b | gpu-light |
 | **Embedding** | テキストをベクトル化し、嗜好と候補POIの類似度計算・リランキングを行う。埋め込みモデルは軽量なため多数並列実行が可能。 | nomic-embed-text | gpu-embed |
 | **検索推論** | カテゴリごとに「推論→検索クエリ生成→Tavily検索→結果検証」の自律ループを実行。検索フェーズでは4サーバーすべてが並列で稼働し、各サーバーが1カテゴリを専任。 | qwen2.5:32b-instruct | 全4台 |
@@ -130,7 +130,7 @@ Explainer Agent ─── 根拠説明生成
 
 ### エージェント一覧
 
-#### Heavy LLM エージェント（gpu-heavy / qwen2.5-bakeneko-32b）
+#### Heavy LLM エージェント（gpu-heavy / qwen2.5:32b-instruct）
 
 | エージェント | ファイル | 役割 |
 |-------------|---------|------|
@@ -269,7 +269,7 @@ OLLAMA_WORKER_HEAVY=gpu-heavy:11434
 OLLAMA_WORKER_LIGHT=gpu-light:11434
 OLLAMA_WORKER_EMBED=gpu-embed:11434
 OLLAMA_WORKER_MAFU=gpu-search:11434
-OLLAMA_MODEL_HEAVY=qwen2.5-bakeneko-32b-instruct-v2
+OLLAMA_MODEL_HEAVY=qwen2.5:32b-instruct
 OLLAMA_MODEL_LIGHT=gemma3:12B
 OLLAMA_MODEL_EMBED=nomic-embed-text
 
