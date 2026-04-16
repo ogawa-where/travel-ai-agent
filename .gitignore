@@ -52,7 +52,14 @@ dist/
 *.local
 
 # Config (optional local override)
-config/ollama_workers.json
+backend/config/ollama_workers.json
+
+# Security
+*.pem
+*.key
+*.p12
+*.pfx
+.env.production
 
 # OSRM map data (large files)
 osrm-data/

@@ -5,7 +5,7 @@ Search Evaluator Agent (Phase 2)
 4カテゴリの検索結果を横断的に評価し、
 十分/不足カテゴリを判定する。
 
-Heavy LLM（nubia）を使用。
+Heavy LLM（gpu-heavy）を使用。
 """
 
 import json

@@ -2,9 +2,9 @@
 LLM Gateway
 
 CLAUDE.md セクション8に基づく役割ベースルーティング:
-- Heavy (mafu, nubia): Planner, Explainer
-- Light (qilin): Translator, Summarizer, PreferenceLearner, ProfileUpdater
-- Embed (ranco): Reranker, ExperienceExtractor
+- Heavy (gpu-heavy): Planner, Explainer
+- Light (gpu-light): Translator, Summarizer, PreferenceLearner, ProfileUpdater
+- Embed (gpu-embed): Reranker, ExperienceExtractor
 
 エラーハンドリング (セクション8.7):
 - LLM出力パース失敗: 最大3回リトライ
@@ -70,18 +70,18 @@ HEALTH_CHECK_INTERVAL_SECONDS = 30
 # - LIGHT モデル使用 → LIGHT ワーカー
 # - EMBED モデル使用 → EMBED ワーカー
 AGENT_ROLE_MAPPING = {
-    # Heavy (32B model) - nubia only
+    # Heavy (32B model)
     "planner": WorkerRole.HEAVY,
     "explainer": WorkerRole.HEAVY,
     "profile_updater": WorkerRole.HEAVY,
     "search_evaluator": WorkerRole.HEAVY,
-    # Light (8B/12B model) - qilin
+    # Light (8B/12B model)
     "translator": WorkerRole.LIGHT,
     "summarizer": WorkerRole.LIGHT,
     "preference_learner": WorkerRole.LIGHT,
     "gathering_agent": WorkerRole.LIGHT,
     "experience_extractor": WorkerRole.LIGHT,
-    # Embed - ranco
+    # Embed
     "reranker": WorkerRole.EMBED,
     # Note: search_reasoner, search_poi_extractor, search_verifier use
     # search_routing config for per-category worker/model assignment

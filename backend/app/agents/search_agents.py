@@ -1115,19 +1115,19 @@ async def search_with_reasoning(
     search_model = os.getenv("OLLAMA_MODEL_HEAVY", "qwen2.5:32b-instruct")
     default_routing = {
         "activity": {
-            "host": os.getenv("OLLAMA_WORKER_HEAVY", "172.28.208.214:11434"),
+            "host": os.getenv("OLLAMA_WORKER_HEAVY", "localhost:11434"),
             "model": search_model,
         },
         "food": {
-            "host": os.getenv("OLLAMA_WORKER_LIGHT", "172.28.208.217:11434"),
+            "host": os.getenv("OLLAMA_WORKER_LIGHT", "localhost:11434"),
             "model": search_model,
         },
         "hotel": {
-            "host": os.getenv("OLLAMA_WORKER_EMBED", "172.28.208.207:11434"),
+            "host": os.getenv("OLLAMA_WORKER_EMBED", "localhost:11434"),
             "model": search_model,
         },
         "transportation": {
-            "host": os.getenv("OLLAMA_WORKER_MAFU", "172.28.208.213:11434"),
+            "host": os.getenv("OLLAMA_WORKER_MAFU", "localhost:11434"),
             "model": search_model,
         },
     }

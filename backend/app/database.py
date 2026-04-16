@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     model_config = {"env_file": ".env"}
 
-    database_url: str = "postgresql+asyncpg://travel:travel@postgres:5432/travel_agent"
+    database_url: str = "postgresql+asyncpg://user:password@postgres:5432/travel_agent"
 
 
 settings = Settings()

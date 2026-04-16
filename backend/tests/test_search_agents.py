@@ -685,7 +685,7 @@ class TestSearchReasoningLoop:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.214:11434",
+                worker_host="localhost:11434",
                 model="qwen2.5:32b-instruct",
                 max_iterations=2,
             )
@@ -727,7 +727,7 @@ class TestSearchReasoningLoop:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.214:11434",
+                worker_host="localhost:11434",
                 model="qwen2.5:32b-instruct",
                 max_iterations=2,
             )
@@ -764,7 +764,7 @@ class TestSearchReasoningLoop:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.213:11434",
+                worker_host="localhost:11434",
                 model="okamototk/llama-swallow:8b",
                 hints=["空港からのアクセス情報が必要"],
                 max_iterations=2,
@@ -795,7 +795,7 @@ class TestSearchReasoningLoop:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.214:11434",
+                worker_host="localhost:11434",
                 model="qwen2.5:32b-instruct",
                 max_iterations=2,
             )
@@ -826,7 +826,7 @@ class TestSearchReasoningLoop:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.217:11434",
+                worker_host="localhost:11434",
                 model="okamototk/llama-swallow:8b",
                 max_iterations=2,
             )
@@ -886,7 +886,7 @@ class TestSearchReasoningLoopLLMExtraction:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.214:11434",
+                worker_host="localhost:11434",
                 model="qwen2.5:32b-instruct",
                 max_iterations=1,
             )
@@ -932,7 +932,7 @@ class TestSearchReasoningLoopLLMExtraction:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.214:11434",
+                worker_host="localhost:11434",
                 model="qwen2.5:32b-instruct",
                 max_iterations=1,
             )
@@ -979,7 +979,7 @@ class TestSearchReasoningLoopLLMExtraction:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.214:11434",
+                worker_host="localhost:11434",
                 model="qwen2.5:32b-instruct",
                 max_iterations=1,
             )
@@ -1016,7 +1016,7 @@ class TestSearchReasoningLoopLLMExtraction:
                 destination="京都",
                 constraints=self._make_constraints(),
                 wishes=self._make_wishes(),
-                worker_host="172.28.208.214:11434",
+                worker_host="localhost:11434",
                 model="qwen2.5:32b-instruct",
                 max_iterations=1,
             )

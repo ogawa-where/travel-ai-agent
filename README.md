@@ -56,8 +56,8 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│    mafu (Orchestrator + Transportation Search)                   │
-│                        RTX 3090 Ti (24GB)                        │
+│    gpu-search (Orchestrator + Transportation Search)             │
+│                        GPU Server (24GB VRAM)                    │
 │  ┌──────────┐  ┌───────────────┐  ┌──────────┐  ┌────────────┐ │
 │  │ Frontend │  │  Orchestrator │  │PostgreSQL│  │   OSRM     │ │
 │  │  :3000   │  │    :8000      │  │  :5432   │  │   :5001    │ │
@@ -72,8 +72,8 @@
         ┌─────────────────┼─────────────────┐
         ▼                 ▼                 ▼
 ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│    nubia      │ │    qilin      │ │    gouin      │
-│  RTX 3090 Ti  │ │   RTX 3090    │ │   RTX 3090    │
+│  gpu-heavy    │ │  gpu-light    │ │  gpu-embed    │
+│  GPU (24GB)   │ │  GPU (24GB)   │ │  GPU (24GB)   │
 │  Heavy LLM    │ │  Light LLM    │ │  Embedding    │
 │  qwen:32b     │ │  gemma3:12b   │ │ nomic-embed   │
 │  同時実行: 1  │ │  同時実行: 2  │ │  同時実行: 10 │
@@ -90,10 +90,10 @@ Translator Agent ─── 自然言語 → 制約/嗜好JSON
   │
   ▼
 SearchReasoningLoop x4（並列）
-  ├── Activity Search (nubia)
-  ├── Food Search (qilin)
-  ├── Hotel Search (gouin)
-  └── Transportation Search (mafu)
+  ├── Activity Search (gpu-heavy)
+  ├── Food Search (gpu-light)
+  ├── Hotel Search (gpu-embed)
+  └── Transportation Search (gpu-search)
   │
   ▼
 Normalizer / Deduper ─── 正規化・重複排除
@@ -122,15 +122,15 @@ Explainer Agent ─── 根拠説明生成
 
 | 種類 | 説明 | 使用モデル | 配置サーバー |
 |------|------|-----------|-------------|
-| **Heavy LLM** | 複雑な推論・生成を行うエージェント。制約充足、旅程構成、根拠説明など高い言語能力が求められるタスクを担当。32Bクラスのモデルを使用するため同時実行は1。 | qwen2.5-bakeneko-32b | nubia |
-| **Light LLM** | 要約・抽出・短文生成など比較的単純なLLMタスクを担当。応答速度を重視し、12Bクラスの軽量モデルで同時2つまで実行可能。 | gemma3:12b | qilin |
-| **Embedding** | テキストをベクトル化し、嗜好と候補POIの類似度計算・リランキングを行う。埋め込みモデルは軽量なため多数並列実行が可能。 | nomic-embed-text | gouin |
+| **Heavy LLM** | 複雑な推論・生成を行うエージェント。制約充足、旅程構成、根拠説明など高い言語能力が求められるタスクを担当。32Bクラスのモデルを使用するため同時実行は1。 | qwen2.5-bakeneko-32b | gpu-heavy |
+| **Light LLM** | 要約・抽出・短文生成など比較的単純なLLMタスクを担当。応答速度を重視し、12Bクラスの軽量モデルで同時2つまで実行可能。 | gemma3:12b | gpu-light |
+| **Embedding** | テキストをベクトル化し、嗜好と候補POIの類似度計算・リランキングを行う。埋め込みモデルは軽量なため多数並列実行が可能。 | nomic-embed-text | gpu-embed |
 | **検索推論** | カテゴリごとに「推論→検索クエリ生成→Tavily検索→結果検証」の自律ループを実行。検索フェーズでは4サーバーすべてが並列で稼働し、各サーバーが1カテゴリを専任。 | qwen2.5:32b-instruct | 全4台 |
-| **I/Oツール** | LLMを使わない決定論的処理。検索結果の正規化・重複排除、POIキャッシュなど。純粋なコードロジックで実行。 | なし | mafu |
+| **I/Oツール** | LLMを使わない決定論的処理。検索結果の正規化・重複排除、POIキャッシュなど。純粋なコードロジックで実行。 | なし | gpu-search |
 
 ### エージェント一覧
 
-#### Heavy LLM エージェント（nubia / qwen2.5-bakeneko-32b）
+#### Heavy LLM エージェント（gpu-heavy / qwen2.5-bakeneko-32b）
 
 | エージェント | ファイル | 役割 |
 |-------------|---------|------|
@@ -139,7 +139,7 @@ Explainer Agent ─── 根拠説明生成
 | Profile Updater | `profile_updater.py` | 嗜好学習の完了時やフィードバック後に、長期記憶（プロフィール要約 + 嗜好シグナル）を統合更新。 |
 | Search Evaluator | `search_evaluator.py` | 4カテゴリの検索結果を横断的に評価し、カテゴリ間のバランスや体験の多様性をスコアリング。 |
 
-#### Light LLM エージェント（qilin / gemma3:12b）
+#### Light LLM エージェント（gpu-light / gemma3:12b）
 
 | エージェント | ファイル | 役割 |
 |-------------|---------|------|
@@ -148,7 +148,7 @@ Explainer Agent ─── 根拠説明生成
 | Preference Learner | `preference_learner.py` | ユーザー発話から嗜好シグナル（category / tag / weight / evidence）を抽出。会話中に常時稼働。 |
 | Gathering Agent | `gathering_agent.py` | 旅行企画に必要な情報（日程・人数・予算等）が不足している場合に対話で収集。 |
 
-#### Embedding エージェント（gouin / nomic-embed-text）
+#### Embedding エージェント（gpu-embed / nomic-embed-text）
 
 | エージェント | ファイル | 役割 |
 |-------------|---------|------|
@@ -159,10 +159,10 @@ Explainer Agent ─── 根拠説明生成
 | エージェント | ファイル | 役割 |
 |-------------|---------|------|
 | SearchReasoningLoop | `search_agents.py` | カテゴリごとに自律的な推論ループを実行。LLMが検索クエリを生成→Tavilyで検索→結果を検証→不足があれば再検索。 |
-| ActivitySearchAgent | `search_agents.py` | 体験・観光カテゴリの検索（nubia で実行） |
-| FoodSearchAgent | `search_agents.py` | 食カテゴリの検索（qilin で実行） |
-| HotelSearchAgent | `search_agents.py` | 宿泊カテゴリの検索（gouin で実行） |
-| TransportationSearchAgent | `search_agents.py` | 交通・アクセスカテゴリの検索（mafu で実行） |
+| ActivitySearchAgent | `search_agents.py` | 体験・観光カテゴリの検索（gpu-heavy で実行） |
+| FoodSearchAgent | `search_agents.py` | 食カテゴリの検索（gpu-light で実行） |
+| HotelSearchAgent | `search_agents.py` | 宿泊カテゴリの検索（gpu-embed で実行） |
+| TransportationSearchAgent | `search_agents.py` | 交通・アクセスカテゴリの検索（gpu-search で実行） |
 
 #### I/O ツールエージェント（決定論コード）
 
@@ -176,10 +176,10 @@ Explainer Agent ─── 根拠説明生成
 
 | カテゴリ | サーバー | モデル |
 |---------|---------|--------|
-| Activity（体験・観光） | nubia | qwen2.5:32b-instruct |
-| Food（食） | qilin | qwen2.5:32b-instruct |
-| Hotel（宿） | gouin | qwen2.5:32b-instruct |
-| Transportation（交通） | mafu | qwen2.5:32b-instruct |
+| Activity（体験・観光） | gpu-heavy | qwen2.5:32b-instruct |
+| Food（食） | gpu-light | qwen2.5:32b-instruct |
+| Hotel（宿） | gpu-embed | qwen2.5:32b-instruct |
+| Transportation（交通） | gpu-search | qwen2.5:32b-instruct |
 
 ## 記憶設計
 
@@ -264,11 +264,11 @@ cp .env.example .env
 
 ```bash
 # Ollama（4サーバー構成）
-OLLAMA_WORKERS=nubia:11434,qilin:11434,gouin:11434,mafu:11434
-OLLAMA_WORKER_HEAVY=nubia:11434
-OLLAMA_WORKER_LIGHT=qilin:11434
-OLLAMA_WORKER_EMBED=gouin:11434
-OLLAMA_WORKER_MAFU=mafu:11434
+OLLAMA_WORKERS=gpu-heavy:11434,gpu-light:11434,gpu-embed:11434,gpu-search:11434
+OLLAMA_WORKER_HEAVY=gpu-heavy:11434
+OLLAMA_WORKER_LIGHT=gpu-light:11434
+OLLAMA_WORKER_EMBED=gpu-embed:11434
+OLLAMA_WORKER_MAFU=gpu-search:11434
 OLLAMA_MODEL_HEAVY=qwen2.5-bakeneko-32b-instruct-v2
 OLLAMA_MODEL_LIGHT=gemma3:12B
 OLLAMA_MODEL_EMBED=nomic-embed-text
@@ -299,13 +299,13 @@ OSRMで日本地図のルート計算を行うため、地図データをダウ�
 - OSRM用に前処理（extract → partition → customize）
 - 処理時間: 30分〜1時間（マシンスペック依存）
 
-### 4. mafu の IP アドレス設定
+### 4. オーケストレーターの IP アドレス設定
 
 オーケストレーターサーバーのIPを `ollama_workers.json` に反映します。
 
 ```bash
 ./scripts/update-mafu-ip.sh           # 自動検出
-./scripts/update-mafu-ip.sh 192.168.1.100  # 手動指定
+./scripts/update-mafu-ip.sh <YOUR_IP>      # 手動指定
 ```
 
 ### 5. 起動
@@ -424,7 +424,7 @@ docker compose down
 │   └── package.json
 ├── scripts/
 │   ├── setup-osrm.sh        # OSRM日本地図セットアップ
-│   └── update-mafu-ip.sh    # mafuのIPアドレス更新
+│   └── update-mafu-ip.sh    # オーケストレーターIPアドレス更新
 ├── osrm-data/               # OSRMデータ（gitignore）
 ├── docker-compose.yml
 ├── .env.example
