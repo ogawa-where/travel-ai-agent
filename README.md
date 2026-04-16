@@ -449,4 +449,4 @@ docker compose down
 
 ## ライセンス
 
-Private
+MIT License
