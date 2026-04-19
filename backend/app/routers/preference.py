@@ -162,17 +162,17 @@ async def chat(
         existing_signals=existing_signals,
     )
 
-    # Save new signals to database
+    # Save new signals to database (with deduplication)
     new_signals = []
     for signal_data in extraction_result.get("signals", []):
-        signal = PreferenceSignal(
+        signal = await long_term_memory.add_signal(
+            db,
             user_id=user_id,
             category=signal_data["category"],
             tag=signal_data["tag"],
             weight=signal_data["weight"],
             evidence=signal_data["evidence"],
         )
-        db.add(signal)
         new_signals.append(signal)
 
     # Update profile summary if we got new signals
@@ -320,24 +320,32 @@ async def chat_stream(
                 existing_signals=existing_signals,
             )
 
-            # シグナルを保存
+            # シグナルを保存（重複チェック付き）
             new_signals = []
             for signal_data in extraction_result.get("signals", []):
-                signal = PreferenceSignal(
+                signal = await long_term_memory.add_signal(
+                    db,
                     user_id=user_id,
                     category=signal_data["category"],
                     tag=signal_data["tag"],
                     weight=signal_data["weight"],
                     evidence=signal_data["evidence"],
                 )
-                db.add(signal)
                 new_signals.append(signal)
 
-            # シグナルがあれば送信
+            # シグナルがあればプロフィール更新→commit→SSE送信
             if new_signals:
-                await db.flush()
-                for signal in new_signals:
-                    await db.refresh(signal)
+                # プロフィール要約を先に更新
+                new_summary = await preference_learner.update_profile_summary(
+                    current_summary=user.profile.summary if user.profile else "",
+                    new_signals=extraction_result.get("signals", []),
+                )
+                if user.profile:
+                    user.profile.summary = new_summary
+
+                # プロフィール更新をcommit（シグナルはadd_signal内でflush済み）
+                await db.commit()
+
                 signals_data = [
                     {
                         "id": str(signal.id),
@@ -348,15 +356,7 @@ async def chat_stream(
                     for signal in new_signals
                 ]
                 yield f"data: {json.dumps({'type': 'signals', 'signals': signals_data}, ensure_ascii=False)}\n\n"
-
-            # プロフィール要約を更新
-            if new_signals:
-                new_summary = await preference_learner.update_profile_summary(
-                    current_summary=user.profile.summary if user.profile else "",
-                    new_signals=extraction_result.get("signals", []),
-                )
-                if user.profile:
-                    user.profile.summary = new_summary
+                yield f"data: {json.dumps({'type': 'profile_updated'}, ensure_ascii=False)}\n\n"
 
             # レスポンスをストリーミングで生成
             known_signals = [

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch } from 'vue'
-import type { TravelPlan, POIFeedbackType, POICategory, GeoEnrichedItinerary } from '../lib/api'
+import type { TravelPlan, POIFeedbackType, POICategory, GeoEnrichedItinerary, POIDetail } from '../lib/api'
 import { api } from '../lib/api'
 import ItineraryDisplay from './ItineraryDisplay.vue'
 import ItineraryMap from './ItineraryMap.vue'
 import MapModal from './MapModal.vue'
+import POIDetailModal from './POIDetailModal.vue'
 
 const props = defineProps<{
   plan: TravelPlan
@@ -29,6 +30,12 @@ const geoLoading = ref(false)
 const geoError = ref(false)
 const showMapModal = ref(false)
 
+// POI Detail modal state
+const showPOIDetail = ref(false)
+const poiDetail = ref<POIDetail | null>(null)
+const poiDetailLoading = ref(false)
+const poiDetailError = ref<string | null>(null)
+
 // Fetch geo data when plan becomes available
 const fetchGeoData = async () => {
   if (geoData.value || geoLoading.value) return
@@ -47,15 +54,6 @@ const fetchGeoData = async () => {
 watch(() => props.plan, () => {
   fetchGeoData()
 }, { immediate: true })
-
-const scorePercentage = computed(() => Math.round(props.plan.score * 100))
-
-const scoreColor = computed(() => {
-  if (props.plan.score >= 0.8) return '#48bb78'
-  if (props.plan.score >= 0.6) return '#4299e1'
-  if (props.plan.score >= 0.4) return '#ed8936'
-  return '#f56565'
-})
 
 const daysCount = computed(() => props.plan.itinerary.days?.length || 0)
 
@@ -99,6 +97,31 @@ const handlePOIFeedback = async (
     delete poiFeedback[poiName]
   }
 }
+
+// Handle POI click to show detail modal
+const handlePOIClick = async (poiName: string, category: POICategory) => {
+  showPOIDetail.value = true
+  poiDetailLoading.value = true
+  poiDetailError.value = null
+  poiDetail.value = null
+
+  try {
+    // Get destination from plan
+    const destination = props.plan.itinerary.days?.[0]?.items?.[0]?.poi?.location || ''
+    poiDetail.value = await api.getPOIDetail(poiName, destination, category)
+  } catch (error) {
+    console.error('Failed to fetch POI detail:', error)
+    poiDetailError.value = 'POI情報の取得に失敗しました'
+  } finally {
+    poiDetailLoading.value = false
+  }
+}
+
+const closePOIDetail = () => {
+  showPOIDetail.value = false
+  poiDetail.value = null
+  poiDetailError.value = null
+}
 </script>
 
 <template>
@@ -113,9 +136,6 @@ const handlePOIFeedback = async (
       <div class="plan-info">
         <h3 class="plan-title">{{ plan.itinerary.title || '旅行プラン' }}</h3>
         <p class="plan-subtitle">{{ daysCount }}日間の旅程</p>
-      </div>
-      <div class="plan-score" :style="{ backgroundColor: scoreColor }">
-        {{ scorePercentage }}
       </div>
       <div class="expand-icon" :class="{ expanded: isExpanded }">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -144,6 +164,7 @@ const handlePOIFeedback = async (
           :feedback-enabled="!!userId"
           :poi-feedback="poiFeedback"
           @poi-feedback="handlePOIFeedback"
+          @poi-click="handlePOIClick"
         />
 
         <!-- Map section -->
@@ -165,19 +186,6 @@ const handlePOIFeedback = async (
         <div v-if="plan.rationale" class="rationale">
           <h4>このプランについて</h4>
           <p>{{ plan.rationale }}</p>
-        </div>
-
-        <div class="score-breakdown" v-if="Object.keys(plan.score_breakdown).length > 0">
-          <h4>スコア詳細</h4>
-          <div class="score-bars">
-            <div v-for="(value, key) in plan.score_breakdown" :key="key" class="score-bar-item">
-              <span class="score-label">{{ key }}</span>
-              <div class="score-bar">
-                <div class="score-fill" :style="{ width: `${value * 100}%` }"></div>
-              </div>
-              <span class="score-value">{{ Math.round(value * 100) }}</span>
-            </div>
-          </div>
         </div>
 
         <div class="feedback-section">
@@ -214,17 +222,30 @@ const handlePOIFeedback = async (
       :visible="showMapModal"
       @close="showMapModal = false"
     />
+
+    <!-- POI Detail modal -->
+    <POIDetailModal
+      :visible="showPOIDetail"
+      :poi="poiDetail"
+      :loading="poiDetailLoading"
+      :error="poiDetailError"
+      @close="closePOIDetail"
+    />
   </div>
 </template>
 
 <style scoped>
 .plan-card {
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(102, 126, 234, 0.12);
+  border-radius: 16px;
   overflow: hidden;
   margin: 0.5rem 0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 2px 8px rgba(102, 126, 234, 0.06),
+    0 8px 32px rgba(102, 126, 234, 0.04);
 }
 
 .plan-header {
@@ -237,7 +258,7 @@ const handlePOIFeedback = async (
 }
 
 .plan-header:hover {
-  background: #f7fafc;
+  background: rgba(102, 126, 234, 0.04);
 }
 
 .plan-icon {
@@ -246,8 +267,8 @@ const handlePOIFeedback = async (
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #ebf8ff;
-  color: #3182ce;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(118, 75, 162, 0.12) 100%);
+  color: #667eea;
   border-radius: 10px;
 }
 
@@ -266,18 +287,6 @@ const handlePOIFeedback = async (
   margin: 2px 0 0;
   font-size: 0.85rem;
   color: #718096;
-}
-
-.plan-score {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  color: white;
-  font-size: 0.85rem;
-  font-weight: 600;
 }
 
 .expand-icon {
@@ -310,31 +319,34 @@ const handlePOIFeedback = async (
 .highlight-tag {
   font-size: 0.75rem;
   padding: 4px 10px;
-  background: #edf2f7;
-  color: #4a5568;
+  background: rgba(102, 126, 234, 0.08);
+  color: #667eea;
   border-radius: 12px;
+  border: 1px solid rgba(102, 126, 234, 0.1);
 }
 
 .plan-details {
   padding: 0 16px 16px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid rgba(102, 126, 234, 0.08);
 }
 
 .feedback-hint {
   padding: 8px 12px;
   margin: 12px 0;
-  background: #ebf8ff;
-  color: #2b6cb0;
-  border-radius: 6px;
+  background: rgba(102, 126, 234, 0.08);
+  color: #667eea;
+  border-radius: 8px;
   font-size: 0.8rem;
   text-align: center;
+  border: 1px solid rgba(102, 126, 234, 0.1);
 }
 
 .rationale {
   margin-top: 16px;
   padding: 12px;
-  background: #f7fafc;
-  border-radius: 8px;
+  background: rgba(102, 126, 234, 0.04);
+  border-radius: 10px;
+  border: 1px solid rgba(102, 126, 234, 0.06);
 }
 
 .rationale h4 {
@@ -350,91 +362,44 @@ const handlePOIFeedback = async (
   line-height: 1.5;
 }
 
-.score-breakdown {
-  margin-top: 16px;
-}
-
-.score-breakdown h4 {
-  margin: 0 0 10px;
-  font-size: 0.85rem;
-  color: #2d3748;
-}
-
-.score-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.score-bar-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.score-label {
-  width: 80px;
-  font-size: 0.75rem;
-  color: #718096;
-}
-
-.score-bar {
-  flex: 1;
-  height: 8px;
-  background: #e2e8f0;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.score-fill {
-  height: 100%;
-  background: #4299e1;
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-
-.score-value {
-  width: 30px;
-  font-size: 0.75rem;
-  color: #4a5568;
-  text-align: right;
-}
-
 .feedback-section {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid rgba(102, 126, 234, 0.08);
 }
 
 .feedback-toggle {
   width: 100%;
   padding: 10px;
-  background: #edf2f7;
-  border: none;
-  border-radius: 8px;
-  color: #4a5568;
+  background: rgba(102, 126, 234, 0.06);
+  border: 1px solid rgba(102, 126, 234, 0.1);
+  border-radius: 10px;
+  color: #667eea;
   font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 .feedback-toggle:hover {
-  background: #e2e8f0;
+  background: rgba(102, 126, 234, 0.12);
 }
 
 .feedback-form textarea {
   width: 100%;
   padding: 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border: 1px solid rgba(102, 126, 234, 0.15);
+  border-radius: 10px;
   font-size: 0.9rem;
   resize: vertical;
   font-family: inherit;
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .feedback-form textarea:focus {
   outline: none;
-  border-color: #4299e1;
+  border-color: rgba(102, 126, 234, 0.5);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
 .feedback-actions {
@@ -446,22 +411,33 @@ const handlePOIFeedback = async (
 
 .cancel-btn {
   padding: 8px 16px;
-  background: #edf2f7;
-  border: none;
-  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
   color: #4a5568;
   font-size: 0.85rem;
   cursor: pointer;
+  transition: background 0.2s;
+}
+
+.cancel-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .submit-btn {
   padding: 8px 16px;
-  background: #4299e1;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   color: white;
   font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s;
+}
+
+.submit-btn:hover:not(:disabled) {
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
 .submit-btn:disabled {
@@ -485,7 +461,7 @@ const handlePOIFeedback = async (
   height: 250px;
   background: linear-gradient(110deg, #e2e8f0 8%, #edf2f7 18%, #e2e8f0 33%);
   background-size: 200% 100%;
-  border-radius: 8px;
+  border-radius: 10px;
   animation: skeleton-shine 1.5s linear infinite;
 }
 
@@ -505,17 +481,18 @@ const handlePOIFeedback = async (
   width: 100%;
   margin-top: 8px;
   padding: 8px;
-  background: #edf2f7;
-  border: none;
-  border-radius: 6px;
-  color: #4a5568;
+  background: rgba(102, 126, 234, 0.06);
+  border: 1px solid rgba(102, 126, 234, 0.1);
+  border-radius: 8px;
+  color: #667eea;
   font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 .map-expand-btn:hover {
-  background: #e2e8f0;
+  background: rgba(102, 126, 234, 0.12);
 }
 
 /* Transition */

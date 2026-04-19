@@ -7,7 +7,7 @@ import json
 import logging
 from typing import AsyncGenerator
 
-from app.schemas.travel_planning import CollectedTravelInfo
+from app.schemas.travel_planning import CollectedTravelInfo, RequiredInfoStatus
 from app.services.llm_gateway import llm_gateway, ModelTier
 
 logger = logging.getLogger(__name__)
@@ -21,21 +21,25 @@ GATHERING_SYSTEM_PROMPT = """あなたは旅行プランナーのアシスタン
 2. 自然な会話を心がけ、一度に多くを聞きすぎない
 3. ユーザーの回答から情報を正確に抽出する
 
-## 収集すべき情報（優先度順）
-1. 予算（総額または一人あたり）
-2. 食の好み（和食、洋食、名物料理など）
-3. やりたいこと・体験したいこと（観光、体験、アクティビティ）
-4. 宿泊の希望（旅館、ホテル、民宿など）
-5. 移動手段の希望（レンタカー、公共交通機関など）
-6. 旅のペース（ゆっくり、普通、アクティブ）
-7. 必ず行きたい場所（あれば）
-8. 避けたいもの（あれば）
+## 【必須】最優先で確認する情報
+以下の3つは必ず確認してください：
+1. **予算**（総額または一人あたり）
+2. **やりたいこと**（観光、体験、アクティビティなど最低1つ）
+3. **移動手段**（レンタカー、公共交通機関など）
+
+## 【任意】必須情報が揃った後に確認する情報
+- 食の好み（和食、洋食、名物料理など）
+- 宿泊の希望（旅館、ホテル、民宿など）
+- 旅のペース（ゆっくり、普通、アクティブ）
+- 必ず行きたい場所（あれば）
+- 避けたいもの（あれば）
 
 ## 会話のルール
+- **まず必須情報（予算、やりたいこと、移動手段）を確認する**
 - 1回の返答で聞く質問は1-2つまで
 - ユーザーの回答を要約してから次の質問に移る
-- 強制しない、「もしあれば」「特になければ」などの表現を使う
-- 十分な情報が集まったら「準備ができました」と伝える
+- 必須情報が3つ揃ったら「基本的な情報が揃いました！」と伝える
+- 任意情報は「もしあれば」「特になければ」などの表現を使う
 
 ## 出力形式
 以下のJSON形式で回答してください：
@@ -53,8 +57,7 @@ GATHERING_SYSTEM_PROMPT = """あなたは旅行プランナーのアシスタン
     "avoid": ["混雑した場所"] など,
     "pace": null または "ゆっくり" / "普通" / "アクティブ",
     "special_requests": null または 特別なリクエスト
-  },
-  "is_ready": true/false (十分な情報が集まったか)
+  }
 }
 ```
 """
@@ -92,26 +95,24 @@ INFO_EXTRACTION_PROMPT = """以下の会話履歴から、旅行に関する情�
     "avoid": [],
     "pace": null または "ゆっくり"/"普通"/"アクティブ",
     "special_requests": null または "文字列"
-  }},
-  "is_ready": false
+  }}
 }}
 ```
 
 重要：
 - 既存の情報と新しい情報をマージする
 - 不明な項目はnullまたは空配列のまま
-- is_ready は予算と少なくとも1つの希望が分かった場合にtrue
 """
 
 GREETING_TEMPLATE = """ありがとうございます！
 
 **{area}** への **{days}日間** の旅行ですね。
-{num_people}人でのご旅行、素敵ですね！
+{num_people}人でのご旅行{budget_text}、素敵ですね！
 
 より良いプランを作るために、いくつか教えてください。
 
-まず、今回の旅行の**予算**はどのくらいをお考えですか？
-（例：総額で5万円くらい、一人3万円くらい、など。特に決まっていなければ「特になし」でOKです）"""
+まず、{area}で**どんなことをしたい**ですか？
+（例：温泉に入りたい、景色を見たい、美術館に行きたい、など）"""
 
 
 class GatheringAgent:
@@ -125,10 +126,17 @@ class GatheringAgent:
         end = datetime.strptime(basic_info.end_date, "%Y-%m-%d")
         days = (end - start).days + 1
 
+        # 予算の表示テキスト
+        if basic_info.budget:
+            budget_text = f"、予算{basic_info.budget:,}円"
+        else:
+            budget_text = ""
+
         return GREETING_TEMPLATE.format(
             area=basic_info.area,
             days=days,
             num_people=basic_info.num_people,
+            budget_text=budget_text,
         )
 
     async def process_message(
@@ -218,40 +226,98 @@ class GatheringAgent:
             for msg in conversation_history[-6:]
         )
 
-        current_info_dict = current_info.model_dump(exclude_none=True)
+        # 4カテゴリの収集状況をフォーマット
+        # 1. 体験・観光（activity）
+        # 2. 食（food）
+        # 3. 宿（hotel）
+        # 4. 交通（transportation）
+        collected_items = []
+        not_collected_items = []
 
-        # ストリーミング用のシンプルなプロンプト（JSON形式は使わない）
+        # 予算（フォームで入力済み）
+        if current_info.budget:
+            collected_items.append(f"- 予算: {current_info.budget:,}円（フォームで入力済み）")
+
+        # 1. 体験・観光
+        if current_info.activity_preferences:
+            collected_items.append(f"- やりたいこと: {', '.join(current_info.activity_preferences)}")
+        else:
+            not_collected_items.append("- やりたいこと・体験したいこと（観光、アクティビティなど）")
+
+        # 2. 食
+        if current_info.food_preferences:
+            collected_items.append(f"- 食の好み: {', '.join(current_info.food_preferences)}")
+        else:
+            not_collected_items.append("- 食の好み（和食、洋食、地元の名物など）")
+
+        # 3. 宿
+        if current_info.accommodation_type:
+            collected_items.append(f"- 宿泊の希望: {current_info.accommodation_type}")
+        else:
+            not_collected_items.append("- 宿泊の希望（旅館、ホテル、民宿など）")
+
+        # 4. 交通
+        if current_info.transportation:
+            collected_items.append(f"- 移動手段: {current_info.transportation}")
+        else:
+            not_collected_items.append("- 移動手段（レンタカー、公共交通機関など）")
+
+        # その他の収集済み情報
+        if current_info.must_visit:
+            collected_items.append(f"- 行きたい場所: {', '.join(current_info.must_visit)}")
+        if current_info.avoid:
+            collected_items.append(f"- 避けたいこと: {', '.join(current_info.avoid)}")
+        if current_info.pace:
+            collected_items.append(f"- 旅のペース: {current_info.pace}")
+
+        collected_str = "\n".join(collected_items) if collected_items else "（まだ何も収集していません）"
+        not_collected_str = "\n".join(not_collected_items) if not_collected_items else "（全て収集済み）"
+
+        # 4カテゴリのうちいくつ揃っているか
+        category_count = sum([
+            bool(current_info.activity_preferences),
+            bool(current_info.food_preferences),
+            bool(current_info.accommodation_type),
+            bool(current_info.transportation),
+        ])
+
+        # ストリーミング用のプロンプト
         stream_system_prompt = f"""あなたは旅行プランナーのアシスタントです。
 ユーザーから旅行に関する詳細情報を収集するために会話を行います。
 
-## 旅行の基本情報
+## 旅行の基本情報（フォームで入力済み）
 - 観光エリア: {current_info.area}
 - 日程: {current_info.start_date} 〜 {current_info.end_date}
 - 人数: {current_info.num_people}人
+- 予算: {f'{current_info.budget:,}円' if current_info.budget else '未設定'}
 
-## 既に収集した情報
-{json.dumps(current_info_dict, ensure_ascii=False, indent=2)}
+## ★既に収集済みの情報（絶対にこれらについて再度質問しないでください）
+{collected_str}
+
+## まだ聞いていない情報（これらについて質問してください）
+{not_collected_str}
 
 ## 会話履歴
 {history_str}
 
-## あなたの役割
-1. ユーザーの回答を確認し、要約する
-2. まだ聞いていない情報について質問する
-3. 十分な情報が集まったら「準備ができました」と伝える
+## 収集すべき4カテゴリ
+1. やりたいこと（体験・観光）
+2. 食の好み
+3. 宿泊の希望
+4. 移動手段
 
-## 収集すべき情報（優先度順）
-- 予算（総額または一人あたり）
-- 食の好み
-- やりたいこと・体験したいこと
-- 宿泊の希望
-- 移動手段の希望
-- 旅のペース
+現在 {category_count}/4 カテゴリ収集済み
 
-## ルール
-- 1回の返答で聞く質問は1-2つまで
-- 自然な会話を心がける
-- プレーンテキストで返答（JSON不要）"""
+## 重要なルール
+1. **絶対に同じことを2回聞かない** - 上記「収集済みの情報」にあるものは質問しない
+2. **予算は既にフォームで入力済みなので聞かない**
+3. ユーザーの回答を短く確認してから、次の質問に移る
+4. 1回の返答で聞く質問は1つだけ
+5. 自然な会話を心がける
+6. **4カテゴリのうち2つ以上揃ったら**「これで旅行プランを作成する準備ができました！他にご希望があればお聞かせください。」と伝える
+
+## 出力形式
+プレーンテキストで返答してください（JSON不要）"""
 
         full_response = ""
 
@@ -272,7 +338,23 @@ class GatheringAgent:
                 current_info=current_info,
             )
             missing_info = self._get_missing_info(updated_info)
-            is_ready = len(missing_info) <= 2
+
+            # is_ready の判定:
+            # 1. AIが「準備ができました」と言った場合
+            # 2. または、4カテゴリのうち2つ以上揃った場合
+            ready_phrases = ["準備ができました", "準備が整いました", "プランを作成する準備"]
+            ai_said_ready = any(phrase in full_response for phrase in ready_phrases)
+
+            # 4カテゴリのうちいくつ揃っているか
+            category_count = sum([
+                bool(updated_info.activity_preferences),
+                bool(updated_info.food_preferences),
+                bool(updated_info.accommodation_type),
+                bool(updated_info.transportation),
+            ])
+            has_enough_info = category_count >= 2
+
+            is_ready = ai_said_ready or has_enough_info
 
             # 最終結果を送信
             yield ("", updated_info, is_ready, missing_info)
@@ -288,32 +370,38 @@ class GatheringAgent:
         current_info: CollectedTravelInfo,
     ) -> CollectedTravelInfo:
         """会話から情報を抽出（非ストリーミング）"""
-        extraction_prompt = f"""以下の会話から旅行に関する情報を抽出してJSON形式で返してください。
+        extraction_prompt = f"""以下のユーザーメッセージから旅行に関する新しい情報を抽出してJSON形式で返してください。
 
 ## ユーザーのメッセージ
-{user_message}
+「{user_message}」
 
-## アシスタントの返答
-{assistant_response}
+## 既存の収集済み情報（これらは既に収集済みなので変更しないでください）
+- 予算: {current_info.budget or current_info.budget_per_person or '未収集'}
+- やりたいこと: {', '.join(current_info.activity_preferences) if current_info.activity_preferences else '未収集'}
+- 移動手段: {current_info.transportation or '未収集'}
+- 食の好み: {', '.join(current_info.food_preferences) if current_info.food_preferences else '未収集'}
+- 宿泊タイプ: {current_info.accommodation_type or '未収集'}
+- ペース: {current_info.pace or '未収集'}
 
-## 既存の情報
-{json.dumps(current_info.model_dump(exclude_none=True), ensure_ascii=False)}
+## 抽出ルール
+1. ユーザーのメッセージから**新しく判明した情報のみ**を抽出する
+2. 金額は数値に変換する（例: 「5万円」→ 50000）
+3. 複数の項目が含まれる場合は配列にする
+4. 関係ない情報や不明な項目はnullまたは空配列のまま
 
-## 出力形式（JSON のみ）
+## 出力形式（JSONのみ、説明文なし）
 {{
-  "budget": null または 数値,
-  "budget_per_person": null または 数値,
-  "transportation": null または "文字列",
-  "accommodation_type": null または "文字列",
+  "budget": null,
+  "budget_per_person": null,
+  "transportation": null,
+  "accommodation_type": null,
   "food_preferences": [],
   "activity_preferences": [],
   "must_visit": [],
   "avoid": [],
-  "pace": null または "ゆっくり"/"普通"/"アクティブ",
-  "special_requests": null または "文字列"
-}}
-
-既存情報に追加・更新がある項目のみ値を設定してください。"""
+  "pace": null,
+  "special_requests": null
+}}"""
 
         try:
             response = await llm_gateway.generate(
@@ -390,24 +478,39 @@ class GatheringAgent:
 
         return CollectedTravelInfo(**data)
 
-    def _get_missing_info(self, info: CollectedTravelInfo) -> list[str]:
-        """不足している情報のリストを返す"""
-        missing = []
+    def _check_required_info(self, info: CollectedTravelInfo) -> RequiredInfoStatus:
+        """4カテゴリの収集状況をチェック"""
+        return RequiredInfoStatus(
+            has_activities=(len(info.activity_preferences) >= 1),
+            has_food=(len(info.food_preferences) >= 1),
+            has_accommodation=(info.accommodation_type is not None),
+            has_transportation=(info.transportation is not None),
+        )
 
-        if info.budget is None and info.budget_per_person is None:
-            missing.append("予算")
-        if not info.food_preferences:
-            missing.append("食の好み")
+    def _get_missing_required_info(self, info: CollectedTravelInfo) -> list[str]:
+        """不足している4カテゴリ情報のリスト"""
+        missing = []
         if not info.activity_preferences:
             missing.append("やりたいこと")
+        if not info.food_preferences:
+            missing.append("食の好み")
         if info.accommodation_type is None:
             missing.append("宿泊の希望")
         if info.transportation is None:
             missing.append("移動手段")
+        return missing
+
+    def _get_missing_optional_info(self, info: CollectedTravelInfo) -> list[str]:
+        """不足している任意情報のリスト"""
+        missing = []
         if info.pace is None:
             missing.append("旅のペース")
-
+        # must_visit, avoid, special_requests は積極的に聞かない
         return missing
+
+    def _get_missing_info(self, info: CollectedTravelInfo) -> list[str]:
+        """不足している情報のリストを返す（互換性のため維持）"""
+        return self._get_missing_required_info(info) + self._get_missing_optional_info(info)
 
 
 # シングルトンインスタンス

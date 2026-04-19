@@ -77,6 +77,12 @@ interface ChatResponse {
   updated_signals: PreferenceSignal[]
 }
 
+// マッチタグ（色分け表示用）
+interface MatchTag {
+  text: string
+  type: 'preference' | 'wish'  // preference: 長期嗜好（紫）, wish: 今回の要望（黄）
+}
+
 // 旅行企画モード用インターフェース
 interface POI {
   name: string
@@ -89,6 +95,7 @@ interface POI {
   rating: number | null
   tags: string[]
   source_url: string
+  match_tags?: MatchTag[]  // マッチタグ（色分け表示用）
 }
 
 interface ItineraryItem {
@@ -243,6 +250,12 @@ interface BasicTravelInfo {
   start_date: string       // "YYYY-MM-DD"
   end_date: string         // "YYYY-MM-DD"
   num_people: number
+  budget: number           // 予算（円）- 必須
+  // 4カテゴリ（任意）
+  activity_preferences?: string
+  food_preferences?: string
+  accommodation_type?: string
+  transportation?: string
 }
 
 interface CollectedTravelInfo {
@@ -262,10 +275,25 @@ interface CollectedTravelInfo {
   special_requests?: string
 }
 
+interface RequiredInfoStatus {
+  has_activities: boolean  // 体験・観光
+  has_food: boolean  // 食
+  has_accommodation: boolean  // 宿
+  has_transportation: boolean  // 交通
+  category_count: number  // 収集済みカテゴリ数
+  is_complete: boolean  // 2カテゴリ以上揃っているか
+}
+
 interface TravelGatheringResponse {
   session_id: string
   assistant_message: string
   collected_info: CollectedTravelInfo
+  // 新しい必須情報管理
+  required_info_status: RequiredInfoStatus
+  all_required_satisfied: boolean  // 必須情報が全て揃ったか
+  missing_required_info: string[]  // 不足している必須情報
+  missing_optional_info: string[]  // 不足している任意情報
+  // 既存フィールド（互換性）
   is_ready: boolean        // 情報収集が十分かどうか
   missing_info: string[]   // まだ収集していない情報のリスト
 }
@@ -289,6 +317,40 @@ interface GeoEnrichedDay {
 
 interface GeoEnrichedItinerary {
   days: GeoEnrichedDay[]
+}
+
+// POI詳細情報
+interface POIDetail {
+  name: string
+  category: string
+  description: string | null
+  location: string | null
+  address: string | null
+  rating: number | null
+  review_count: number | null
+  price_level: number | null
+  price_range: string | null
+  budget_per_person: number | null
+  hours: Record<string, string> | null
+  duration_minutes: number | null
+  features: string[]
+  tags: string[]
+  experiences: string[]
+  source_url: string | null
+  source_name: string | null
+}
+
+// 旅行企画リクエスト履歴レスポンス
+interface TravelPlanRequestResponse {
+  id: string
+  session_id: string
+  user_id: string
+  raw_request: string
+  constraints: Record<string, unknown>
+  wishes: Record<string, unknown>
+  status: string
+  created_at: string
+  updated_at: string
 }
 
 export const api = {
@@ -369,6 +431,7 @@ export const api = {
     onChunk: (content: string) => void,
     onSignals?: (signals: PreferenceSignal[]) => void,
     onDone?: (sessionId: string) => void,
+    onProfileUpdated?: () => void,
     onError?: (error: string) => void,
   ): Promise<void> {
     const response = await fetch(`${API_BASE_URL}/api/preference/chat/stream`, {
@@ -419,6 +482,9 @@ export const api = {
                   break
                 case 'signals':
                   onSignals?.(data.signals)
+                  break
+                case 'profile_updated':
+                  onProfileUpdated?.()
                   break
                 case 'done':
                   onDone?.(data.session_id)
@@ -611,6 +677,80 @@ export const api = {
     return response.json()
   },
 
+  // 構造化フォームからプラン生成（進捗ストリーミング付き）
+  async submitTravelFormStream(
+    data: TravelPlanFormData,
+    onProgress: (phase: string, percent: number) => void,
+    onDone: (response: TravelChatResponse) => void,
+    onError?: (error: string) => void,
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/travel/plan-with-form/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      onError?.(error)
+      throw new Error(error)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Response body is not readable')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6)
+            if (!jsonStr.trim()) continue
+
+            try {
+              const event = JSON.parse(jsonStr)
+              switch (event.type) {
+                case 'progress':
+                  onProgress(event.phase, event.percent)
+                  break
+                case 'done':
+                  onDone({
+                    user_id: data.user_id,
+                    session_id: event.session_id,
+                    assistant_message: event.assistant_message,
+                    plan_request_id: event.plan_request_id,
+                    plan: event.plan,
+                    status: 'completed',
+                  })
+                  break
+                case 'error':
+                  onError?.(event.message)
+                  break
+              }
+            } catch (e) {
+              console.warn('Failed to parse SSE data:', jsonStr)
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+
   // 全カテゴリ並列検索
   async searchAllCategories(request: CategorySearchRequest): Promise<AllCategorySearchResults> {
     const [activity, food, hotel] = await Promise.allSettled([
@@ -755,6 +895,33 @@ export const api = {
     })
     return response.json()
   },
+
+  // 旅行企画履歴取得
+  async getUserTravelHistory(userId: string): Promise<TravelPlanRequestResponse[]> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/requests/${userId}`)
+    return response.json()
+  },
+
+  // リクエストIDに紐づくプラン一覧取得
+  async getPlansByRequestId(requestId: string): Promise<TravelPlan[]> {
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/api/travel/plans/by-request/${requestId}`)
+    return response.json()
+  },
+
+  // POI詳細取得
+  async getPOIDetail(
+    poiName: string,
+    destination?: string,
+    category?: string,
+  ): Promise<POIDetail> {
+    const params = new URLSearchParams()
+    if (destination) params.append('destination', destination)
+    if (category) params.append('category', category)
+    const queryString = params.toString()
+    const url = `${API_BASE_URL}/api/travel/poi/${encodeURIComponent(poiName)}${queryString ? `?${queryString}` : ''}`
+    const response = await fetchWithErrorHandling(url)
+    return response.json()
+  },
 }
 
-export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, TravelGatheringResponse }
+export type { User, UserProfile, PreferenceSignal, ChatResponse, TravelPlan, TravelChatResponse, LearningCompletionResponse, TravelFeedbackResponse, POI, ItineraryItem, DayPlan, Itinerary, LearnedPreference, UnifiedChatResponse, POIFeedbackType, POICategory, POIFeedbackResponse, WorkerHealth, LLMHealthResponse, LoginResponse, POISearchResult, CategorySearchRequest, CategorySearchResponse, AllCategorySearchResults, GeoEnrichedPOI, GeoEnrichedDay, GeoEnrichedItinerary, TravelPlanFormData, BasicTravelInfo, CollectedTravelInfo, RequiredInfoStatus, TravelGatheringResponse, POIDetail, MatchTag, TravelPlanRequestResponse }

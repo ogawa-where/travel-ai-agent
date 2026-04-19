@@ -21,9 +21,11 @@ from app.schemas.travel_planning import (
     GatheringChatRequest,
     PlanGenerationRequest,
     POICategory,
+    POIDetailResponse,
     POIFeedbackRequest,
     POIFeedbackResponse,
     POIFeedbackType,
+    RequiredInfoStatus,
     SearchQuery,
     TranslateRequestInput,
     TravelChatRequest,
@@ -46,6 +48,7 @@ from app.agents.search_agents import (
 from app.agents.translator import translator_agent
 from app.services.experience_extractor import experience_extractor
 from app.services.long_term_memory import long_term_memory
+from app.services.poi_repository import poi_repository
 from app.services.session_manager import session_manager
 
 logger = logging.getLogger(__name__)
@@ -116,9 +119,13 @@ async def create_travel_plan(
             user_profile_summary=profile_summary,
             preference_signals=preference_signals,
         )
+        plan_request.status = "completed"
+        await db.commit()
         return travel_plan
     except Exception as e:
         logger.error(f"Failed to create travel plan: {e}")
+        plan_request.status = "failed"
+        await db.commit()
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
 
 
@@ -207,6 +214,8 @@ async def plan_with_form(
             pre_wishes=wishes,
         )
 
+        plan_request.status = "completed"
+
         assistant_message = _format_plan_response(travel_plan)
 
         await session_manager.add_message(
@@ -223,7 +232,169 @@ async def plan_with_form(
         )
     except Exception as e:
         logger.error(f"Form-based plan generation failed: {e}")
+        plan_request.status = "failed"
+        await db.commit()
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
+
+
+@router.post("/plan-with-form/stream")
+async def plan_with_form_stream(
+    request: TravelPlanFormRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    構造化フォームから旅行プランを生成（SSEで進捗通知）
+
+    進捗イベント:
+    - {"type": "progress", "phase": "translate", "percent": 0}
+    - {"type": "progress", "phase": "search", "percent": 16}
+    - {"type": "progress", "phase": "normalize", "percent": 33}
+    - {"type": "progress", "phase": "rerank", "percent": 50}
+    - {"type": "progress", "phase": "plan", "percent": 66}
+    - {"type": "progress", "phase": "explain", "percent": 83}
+    - {"type": "progress", "phase": "complete", "percent": 100}
+    - {"type": "done", "plan": {...}, "session_id": "..."}
+    - {"type": "error", "message": "..."}
+    """
+    import asyncio
+
+    # ユーザーを取得
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.profile), selectinload(User.preference_signals))
+        .where(User.id == request.user_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # セッションを作成
+    session = await session_manager.create_session(
+        db, request.user_id, mode="travel_planning"
+    )
+
+    # フォームからconstraintsを直接変換（LLMバイパス）
+    constraints = request.to_constraints()
+
+    # free_textがあればTranslator Agentでwishesのみ抽出
+    wishes = None
+    if request.free_text.strip():
+        wishes = await _extract_wishes_only(
+            request.free_text,
+            user_profile_summary=user.profile.summary if user.profile else "",
+            preference_signals=[
+                {
+                    "category": s.category,
+                    "tag": s.tag,
+                    "weight": s.weight,
+                }
+                for s in (user.preference_signals or [])
+            ],
+        )
+
+    # raw_requestを構築（検索用テキスト）
+    raw_request = request.build_raw_request()
+
+    # TravelPlanRequestを作成
+    plan_request = TravelPlanRequest(
+        session_id=session.id,
+        user_id=request.user_id,
+        raw_request=raw_request,
+        status="pending",
+    )
+    db.add(plan_request)
+    await db.flush()
+
+    # ユーザーメッセージを保存
+    await session_manager.add_message(db, session.id, role="user", content=raw_request)
+
+    # プロフィール情報を準備
+    profile_summary = user.profile.summary if user.profile else ""
+    preference_signals = [
+        {
+            "category": s.category,
+            "tag": s.tag,
+            "weight": s.weight,
+            "evidence": s.evidence,
+        }
+        for s in (user.preference_signals or [])
+    ]
+
+    # 進捗通知用のキュー
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    async def on_progress(phase: str, percent: int):
+        await progress_queue.put({"type": "progress", "phase": phase, "percent": percent})
+
+    async def generate_stream() -> AsyncGenerator[str, None]:
+        """SSE形式でストリームを生成"""
+        try:
+            # オーケストレーター実行タスク
+            async def run_orchestrator():
+                return await travel_orchestrator.execute(
+                    db=db,
+                    request=plan_request,
+                    user_profile_summary=profile_summary,
+                    preference_signals=preference_signals,
+                    pre_constraints=constraints,
+                    pre_wishes=wishes,
+                    on_progress=on_progress,
+                )
+
+            # オーケストレーターを非同期で実行
+            orchestrator_task = asyncio.create_task(run_orchestrator())
+
+            # 進捗イベントをストリーミング
+            while not orchestrator_task.done():
+                try:
+                    event = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    continue
+
+            # 残りの進捗イベントを送信
+            while not progress_queue.empty():
+                event = await progress_queue.get()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            # オーケストレーターの結果を取得
+            travel_plan = await orchestrator_task
+
+            plan_request.status = "completed"
+
+            assistant_message = _format_plan_response(travel_plan)
+
+            await session_manager.add_message(
+                db, session.id, role="assistant", content=assistant_message
+            )
+
+            await db.commit()
+
+            # 完了イベントを送信
+            done_data = {
+                "type": "done",
+                "session_id": str(session.id),
+                "plan_request_id": str(plan_request.id),
+                "plan": TravelPlanResponse.model_validate(travel_plan).model_dump(mode="json"),
+                "assistant_message": assistant_message,
+            }
+            yield f"data: {json.dumps(done_data, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            logger.error(f"Plan generation stream error: {e}")
+            plan_request.status = "failed"
+            await db.commit()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def _extract_wishes_only(
@@ -257,6 +428,20 @@ async def get_travel_plan(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     return plan
+
+
+@router.get("/plans/by-request/{request_id}", response_model=list[TravelPlanResponse])
+async def get_plans_by_request(
+    request_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[TravelPlan]:
+    """リクエストIDに紐づく旅行プラン一覧を取得"""
+    result = await db.execute(
+        select(TravelPlan)
+        .where(TravelPlan.request_id == request_id)
+        .order_by(TravelPlan.version)
+    )
+    return list(result.scalars().all())
 
 
 @router.get("/requests/{user_id}", response_model=list[TravelPlanRequestResponse])
@@ -346,6 +531,8 @@ async def travel_chat(
                 preference_signals=preference_signals,
             )
 
+            plan_request.status = "completed"
+
             assistant_message = _format_plan_response(travel_plan)
 
             await session_manager.add_message(
@@ -361,6 +548,7 @@ async def travel_chat(
                 status="completed",
             )
         except Exception as e:
+            plan_request.status = "failed"
             logger.error(f"Plan generation failed: {e}")
             error_message = "申し訳ありません。プランの生成中にエラーが発生しました。もう一度お試しください。"
             await session_manager.add_message(
@@ -458,12 +646,13 @@ async def start_gathering(
         db, user_id, mode="travel_planning"
     )
 
-    # 基本情報を保存
+    # 基本情報を保存（予算も含める）
     collected_info = CollectedTravelInfo(
         area=request.area,
         start_date=request.start_date,
         end_date=request.end_date,
         num_people=request.num_people,
+        budget=request.budget,
     )
 
     # セッションに収集情報を保存（extra_dataとして）
@@ -480,12 +669,23 @@ async def start_gathering(
 
     await db.commit()
 
+    # 必須情報のステータスを取得
+    required_status = gathering_agent._check_required_info(collected_info)
+    missing_required = gathering_agent._get_missing_required_info(collected_info)
+    missing_optional = gathering_agent._get_missing_optional_info(collected_info)
+
     return TravelGatheringResponse(
         session_id=session.id,
         assistant_message=greeting,
         collected_info=collected_info,
-        is_ready=False,
-        missing_info=["予算", "食の好み", "やりたいこと", "宿泊の希望", "移動手段", "旅のペース"],
+        # 新しいフィールド
+        required_info_status=required_status,
+        all_required_satisfied=required_status.is_complete,
+        missing_required_info=missing_required,
+        missing_optional_info=missing_optional,
+        # 互換性のため維持
+        is_ready=required_status.is_complete,
+        missing_info=missing_required + missing_optional,
     )
 
 
@@ -544,12 +744,23 @@ async def gathering_chat(
 
     await db.commit()
 
+    # 必須情報のステータスを取得
+    required_status = gathering_agent._check_required_info(updated_info)
+    missing_required = gathering_agent._get_missing_required_info(updated_info)
+    missing_optional = gathering_agent._get_missing_optional_info(updated_info)
+
     return TravelGatheringResponse(
         session_id=session.id,
         assistant_message=response,
         collected_info=updated_info,
-        is_ready=is_ready,
-        missing_info=missing_info,
+        # 新しいフィールド
+        required_info_status=required_status,
+        all_required_satisfied=required_status.is_complete,
+        missing_required_info=missing_required,
+        missing_optional_info=missing_optional,
+        # 互換性のため維持
+        is_ready=required_status.is_complete,
+        missing_info=missing_required + missing_optional,
     )
 
 
@@ -623,11 +834,31 @@ async def gathering_chat_stream(
 
             await db.commit()
 
+            # 必須情報のステータスを計算
+            required_status = gathering_agent._check_required_info(final_info)
+            missing_required = gathering_agent._get_missing_required_info(final_info)
+            missing_optional = gathering_agent._get_missing_optional_info(final_info)
+            # AIの判定に基づく（final_is_ready は AIが「準備ができました」と言ったかどうか）
+            all_required_satisfied = final_is_ready
+
             # 収集情報を送信
             yield f"data: {json.dumps({'type': 'info', 'collected_info': final_info.model_dump()}, ensure_ascii=False)}\n\n"
 
-            # 完了イベントを送信
-            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id), 'is_ready': final_is_ready, 'missing_info': final_missing, 'collected_info': final_info.model_dump()}, ensure_ascii=False)}\n\n"
+            # 完了イベントを送信（新しいフィールドを含む）
+            done_data = {
+                'type': 'done',
+                'session_id': str(session.id),
+                'collected_info': final_info.model_dump(),
+                # 新しいフィールド
+                'required_info_status': required_status.model_dump(),
+                'all_required_satisfied': all_required_satisfied,
+                'missing_required_info': missing_required,
+                'missing_optional_info': missing_optional,
+                # 互換性のため維持
+                'is_ready': all_required_satisfied,
+                'missing_info': missing_required + missing_optional,
+            }
+            yield f"data: {json.dumps(done_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f"Gathering stream error: {e}")
@@ -750,6 +981,8 @@ async def generate_plan(
             pre_wishes=wishes,
         )
 
+        plan_request.status = "completed"
+
         assistant_message = _format_plan_response(travel_plan)
 
         await session_manager.add_message(
@@ -768,6 +1001,7 @@ async def generate_plan(
         )
 
     except Exception as e:
+        plan_request.status = "failed"
         logger.error(f"Plan generation failed: {e}")
         error_message = "申し訳ありません。プランの生成中にエラーが発生しました。もう一度お試しください。"
         await session_manager.add_message(
@@ -1177,4 +1411,59 @@ async def search_hotels(
         total_count=len(result.items),
         search_time_ms=result.search_time_ms,
         source=result.source,
+    )
+
+
+# =============================================================================
+# POI詳細取得エンドポイント
+# =============================================================================
+
+
+@router.get("/poi/{poi_name}", response_model=POIDetailResponse)
+async def get_poi_detail(
+    poi_name: str,
+    destination: str | None = None,
+    category: str | None = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+) -> POIDetailResponse:
+    """
+    POI詳細を取得
+
+    POI名で検索し、DBに保存されている詳細情報を返します。
+    スコア情報は含みません（表示用）。
+
+    Args:
+        poi_name: POI名
+        destination: 目的地（絞り込み用、任意）
+        category: カテゴリ（絞り込み用、任意）
+
+    Returns:
+        POI詳細情報
+    """
+    poi = await poi_repository.get_poi_by_name(
+        db, poi_name, destination=destination, category=category
+    )
+
+    if not poi:
+        raise HTTPException(status_code=404, detail="POI not found")
+
+    # POICacheからPOIDetailResponseに変換
+    return POIDetailResponse(
+        name=poi.name,
+        category=poi.category,
+        description=poi.description or "",
+        location=poi.location or "",
+        address=poi.address or "",
+        rating=poi.rating,
+        review_count=poi.review_count,
+        price_level=poi.price_level,
+        price_range=poi.price_range or "",
+        budget_per_person=poi.budget_per_person,
+        hours=poi.hours,
+        duration_minutes=poi.duration_minutes,
+        features=poi.features or [],
+        tags=poi.tags or [],
+        experiences=poi.experiences or [],
+        source_url=poi.source_url or "",
+        source_name=poi.source_name or "",
     )

@@ -150,9 +150,10 @@ class LongTermMemoryService:
         existing = result.scalars().first()
 
         if existing:
-            # Update existing signal (average weights)
-            new_weight = (existing.weight + weight) / 2
-            existing.weight = min(1.0, new_weight)
+            # Update existing signal: repeated mentions reinforce the weight
+            # Take the higher weight and boost by 0.1 for re-mention
+            new_weight = max(existing.weight, weight) + 0.1
+            existing.weight = min(1.0, round(new_weight, 2))
             existing.evidence = evidence  # Use latest evidence
             if extra_data:
                 existing.extra_data = {**existing.extra_data, **extra_data}

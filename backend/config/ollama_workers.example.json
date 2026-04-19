@@ -1,28 +1,28 @@
 {
   "workers": [
     {
-      "host": "172.28.208.214:11434",
+      "host": "gpu-heavy:11434",
       "role": "heavy",
       "max_concurrent": 1,
-      "description": "nubia - Primary heavy tasks (Planner, Explainer, ProfileUpdater) + Activity search"
+      "description": "Primary heavy tasks (Planner, Explainer, ProfileUpdater) + Activity search"
     },
     {
-      "host": "172.28.208.217:11434",
+      "host": "gpu-light:11434",
       "role": "light",
       "max_concurrent": 2,
-      "description": "qilin - Light tasks (Translator, Summarizer, PreferenceLearner) + Food search"
+      "description": "Light tasks (Translator, Summarizer, PreferenceLearner) + Food search"
     },
     {
-      "host": "172.28.208.218:11434",
+      "host": "gpu-embed:11434",
       "role": "embed",
       "max_concurrent": 10,
-      "description": "ranco - Embedding tasks (Reranker) + Hotel search"
+      "description": "Embedding tasks (Reranker) + Hotel search"
     },
     {
-      "host": "172.28.208.213:11434",
+      "host": "gpu-search:11434",
       "role": "search",
       "max_concurrent": 2,
-      "description": "mafu - Transportation search (search phase only)"
+      "description": "Transportation search"
     }
   ],
   "routing": {
@@ -38,19 +38,19 @@
   },
   "search_routing": {
     "activity": {
-      "host": "172.28.208.214:11434",
+      "host": "gpu-heavy:11434",
       "model": "qwen2.5:32b-instruct"
     },
     "food": {
-      "host": "172.28.208.217:11434",
+      "host": "gpu-light:11434",
       "model": "qwen2.5:32b-instruct"
     },
     "hotel": {
-      "host": "172.28.208.218:11434",
+      "host": "gpu-embed:11434",
       "model": "qwen2.5:32b-instruct"
     },
     "transportation": {
-      "host": "172.28.208.213:11434",
+      "host": "gpu-search:11434",
       "model": "qwen2.5:32b-instruct"
     }
   }

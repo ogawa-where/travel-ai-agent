@@ -33,7 +33,8 @@ SYSTEM_PROMPT = """あなたは旅行計画の専門家です。
 2. 移動時間を考慮し、無理のないスケジュールにする
 3. 1日の活動は朝から夜まで、適度な休憩を入れる
 4. 食事（朝・昼・夜）を適切に配置する
-5. 宿泊先は毎晩必要
+5. 宿泊先は最終日以外の各日に必要（N日間の旅行 = N-1泊）
+   例: 2日間 → 1泊（1日目のみ宿泊）、3日間 → 2泊（1日目と2日目に宿泊）
 6. days配列の要素数は指定された日数と完全一致させること
 
 出力は以下のJSON形式で返してください：
@@ -56,7 +57,8 @@ SYSTEM_PROMPT = """あなたは旅行計画の専門家です。
             "description": "説明",
             "price_range": "価格帯",
             "duration_minutes": 所要時間,
-            "tags": ["タグ1", "タグ2"]
+            "tags": ["タグ1", "タグ2"],
+            "match_tags": [{"text": "マッチ理由", "type": "preference または wish"}]
           },
           "notes": "補足説明",
           "travel_from_previous": "前の場所からの移動（例：徒歩10分）"
@@ -65,6 +67,7 @@ SYSTEM_PROMPT = """あなたは旅行計画の専門家です。
       "accommodation": {
         "name": "宿泊先名",
         "category": "hotel",
+        "match_tags": [{"text": "マッチ理由", "type": "preference または wish"}],
         ...
       }
     }
@@ -72,6 +75,10 @@ SYSTEM_PROMPT = """あなたは旅行計画の専門家です。
   "total_budget_estimate": 総予算見積もり（円）,
   "highlights": ["ハイライト1", "ハイライト2"]
 }
+
+match_tagsについて:
+- 候補POIに記載されているマッチ情報を参照し、そのまま出力に含めてください
+- type="preference" は長期的なユーザー嗜好、type="wish" は今回の旅行での要望を示します
 """
 
 PLANNER_PROMPT = """以下の条件で旅程を作成してください。
@@ -285,7 +292,19 @@ class PlannerAgent:
             if poi.price_range:
                 line += f" ({poi.price_range})"
             if poi.match_reasons:
-                line += f" [マッチ: {', '.join(poi.match_reasons)}]"
+                # マッチ理由をタイプ付きで表示
+                formatted_reasons = []
+                for r in poi.match_reasons:
+                    if isinstance(r, dict):
+                        type_label = "嗜好" if r.get("type") == "preference" else "要望"
+                        formatted_reasons.append(f"{type_label}:{r.get('text', '')}")
+                    else:
+                        # 後方互換: 文字列の場合
+                        formatted_reasons.append(str(r))
+                if formatted_reasons:
+                    line += f" [マッチ: {', '.join(formatted_reasons)}]"
+                # match_tagsをJSON形式で追加（LLMが参照できるように）
+                line += f" match_tags={poi.match_reasons}"
             lines.append(line)
 
         return "\n".join(lines)
@@ -321,6 +340,14 @@ class PlannerAgent:
             items = []
             for item_data in day_data.get("items", []):
                 poi_data = item_data.get("poi", {})
+                # match_tagsを抽出（LLM出力から）
+                match_tags = poi_data.get("match_tags", [])
+                # 形式の検証: 各要素が{"text": ..., "type": ...}の形式かチェック
+                validated_match_tags = []
+                for tag in match_tags:
+                    if isinstance(tag, dict) and "text" in tag and "type" in tag:
+                        validated_match_tags.append(tag)
+
                 poi = POIBase(
                     name=poi_data.get("name", ""),
                     category=poi_data.get("category", "activity"),
@@ -332,6 +359,7 @@ class PlannerAgent:
                     rating=poi_data.get("rating"),
                     tags=poi_data.get("tags", []),
                     source_url=poi_data.get("source_url", ""),
+                    match_tags=validated_match_tags,
                 )
                 items.append(
                     ItineraryItem(
@@ -347,6 +375,13 @@ class PlannerAgent:
             accommodation = None
             acc_data = day_data.get("accommodation")
             if acc_data:
+                # 宿泊先のmatch_tagsも抽出
+                acc_match_tags = acc_data.get("match_tags", [])
+                validated_acc_tags = []
+                for tag in acc_match_tags:
+                    if isinstance(tag, dict) and "text" in tag and "type" in tag:
+                        validated_acc_tags.append(tag)
+
                 accommodation = POIBase(
                     name=acc_data.get("name", ""),
                     category="hotel",
@@ -354,6 +389,7 @@ class PlannerAgent:
                     description=acc_data.get("description", ""),
                     price_range=acc_data.get("price_range", ""),
                     tags=acc_data.get("tags", []),
+                    match_tags=validated_acc_tags,
                 )
 
             days.append(
@@ -389,10 +425,14 @@ class PlannerAgent:
         completeness = min(total_items / max(expected_items, 1), 1.0)
         scores["completeness"] = completeness
 
-        # 2. 宿泊カバー率
+        # 2. 宿泊カバー率（最終日は宿泊不要: N日間 = N-1泊）
         days_with_accommodation = sum(1 for day in itinerary.days if day.accommodation)
-        accommodation_coverage = days_with_accommodation / max(len(itinerary.days), 1)
-        scores["accommodation"] = accommodation_coverage
+        expected_nights = max(len(itinerary.days) - 1, 0)
+        if expected_nights > 0:
+            accommodation_coverage = days_with_accommodation / expected_nights
+        else:
+            accommodation_coverage = 1.0  # 1日旅行は宿泊不要
+        scores["accommodation"] = min(accommodation_coverage, 1.0)
 
         # 3. 食事カバー率（1日3食目安）
         food_items = sum(

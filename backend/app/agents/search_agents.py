@@ -760,12 +760,38 @@ JSON形式で2〜3個の検索クエリを出力してください。
 - 1つの記事から複数のPOIを抽出してもよい
 - 「{destination}」エリア外の場所は除外すること
 - source_indexは元の検索結果の番号[0]〜[{len(raw_results)-1}]を指定
+- 可能な限り詳細な情報（評価、価格、営業時間等）を抽出すること
 
 検索結果:
 {results_text}
 
-JSON形式で出力:
-{{"pois": [{{"name": "施設名", "location": "地区名", "description": "簡潔な説明", "source_index": 0}}]}}"""
+JSON形式で出力（PTS/RealTravel形式）:
+{{
+  "pois": [
+    {{
+      "name": "施設名（正式名称）",
+      "location": "地区名・エリア名",
+      "address": "詳細住所（わかれば）",
+      "description": "施設の説明（100文字程度）",
+      "rating": 4.5,  // 評価 1.0-5.0（不明ならnull）
+      "review_count": 120,  // レビュー数（不明ならnull）
+      "price_level": 2,  // 価格帯 1=安い 2=普通 3=高め 4=高級（不明ならnull）
+      "price_range": "¥1,000〜2,000",  // 価格帯テキスト
+      "budget_per_person": 1500,  // 1人あたり予算（円、不明ならnull）
+      "hours": "9:00-18:00",  // 営業時間テキスト
+      "duration_minutes": 60,  // 所要時間（分、不明ならnull）
+      "features": ["WiFi", "駐車場", "クレジットカード可"],  // 施設の特徴
+      "tags": ["観光名所", "歴史", "写真映え"],  // 一般的なタグ
+      "source_index": 0
+    }}
+  ]
+}}
+
+注意:
+- 情報が不明な場合はnullまたは空文字を使用
+- 価格帯(price_level)は1〜4の整数で推定
+- 特徴(features)は施設の設備やサービス
+- タグ(tags)は体験や雰囲気に関するキーワード"""
 
         gateway = self._get_gateway()
         result = await gateway.generate_json(
@@ -795,17 +821,32 @@ JSON形式で出力:
                 source_url = ""
                 relevance_score = 0.5
 
+            # PTS形式のフィールドを抽出
             extracted.append(
                 POISearchResult(
+                    # 基本情報
                     name=name,
                     category=category,
-                    location=poi_data.get("location", ""),
                     description=poi_data.get("description", "")[:300],
-                    price_range="",
-                    duration_minutes=None,
-                    opening_hours="",
-                    rating=None,
-                    tags=[],
+                    # 位置情報
+                    location=poi_data.get("location", ""),
+                    address=poi_data.get("address", ""),
+                    latitude=poi_data.get("latitude"),
+                    longitude=poi_data.get("longitude"),
+                    # 評価・レビュー情報（PTS形式）
+                    rating=poi_data.get("rating"),
+                    review_count=poi_data.get("review_count"),
+                    # 価格情報
+                    price_level=poi_data.get("price_level"),
+                    price_range=poi_data.get("price_range", ""),
+                    budget_per_person=poi_data.get("budget_per_person"),
+                    # 時間情報
+                    opening_hours=poi_data.get("hours", ""),
+                    duration_minutes=poi_data.get("duration_minutes"),
+                    # 特徴・タグ（PTS形式）
+                    features=poi_data.get("features", []),
+                    tags=poi_data.get("tags", []),
+                    # ソース情報
                     source_url=source_url,
                     relevance_score=relevance_score,
                     source_name="tavily+llm",
@@ -1069,23 +1110,24 @@ async def search_with_reasoning(
     search_routing = _load_search_routing()
 
     # デフォルトルーティング（設定がない場合）
+    # 検索フェーズでは全4サーバーが32Bモデルを使用
     import os
     search_model = os.getenv("OLLAMA_MODEL_HEAVY", "qwen2.5:32b-instruct")
     default_routing = {
         "activity": {
-            "host": os.getenv("OLLAMA_WORKER_HEAVY", "172.28.208.214:11434"),
+            "host": os.getenv("OLLAMA_WORKER_HEAVY", "localhost:11434"),
             "model": search_model,
         },
         "food": {
-            "host": os.getenv("OLLAMA_WORKER_LIGHT", "172.28.208.217:11434"),
+            "host": os.getenv("OLLAMA_WORKER_LIGHT", "localhost:11434"),
             "model": search_model,
         },
         "hotel": {
-            "host": os.getenv("OLLAMA_WORKER_EMBED", "172.28.208.218:11434"),
+            "host": os.getenv("OLLAMA_WORKER_EMBED", "localhost:11434"),
             "model": search_model,
         },
         "transportation": {
-            "host": os.getenv("OLLAMA_WORKER_MAFU", "172.28.208.213:11434"),
+            "host": os.getenv("OLLAMA_WORKER_MAFU", "localhost:11434"),
             "model": search_model,
         },
     }
@@ -1099,7 +1141,7 @@ async def search_with_reasoning(
         cat_key = category.value
         routing = search_routing.get(cat_key, default_routing.get(cat_key, {}))
         worker_host = routing.get("host", "localhost:11434")
-        model = routing.get("model", "qwen2.5:32b-instruct")
+        model = routing.get("model", search_model)
         hints = hints_per_category.get(cat_key, [])
 
         tasks.append(
@@ -1141,6 +1183,11 @@ async def search_with_reasoning(
             status.successful_categories.append(category_name)
             status.total_results += len(result.items)
             output[category] = result
+            if len(result.items) == 0:
+                logger.warning(
+                    f"Reasoning search returned 0 results for {category_name} "
+                    f"(search succeeded but no POIs extracted)"
+                )
 
     status.all_failed = len(status.failed_categories) == status.total_categories
     status.partial_failure = (
@@ -1154,9 +1201,17 @@ async def search_with_reasoning(
             f"Partial reasoning search failure: failed={status.failed_categories}"
         )
     else:
-        logger.info(
-            f"All reasoning search loops succeeded: total_results={status.total_results}"
-        )
+        empty_categories = [
+            cat.value for cat, res in output.items() if len(res.items) == 0
+        ]
+        if empty_categories:
+            logger.warning(
+                f"Reasoning search completed but {empty_categories} returned 0 results"
+            )
+        else:
+            logger.info(
+                f"All reasoning search loops succeeded: total_results={status.total_results}"
+            )
 
     return SearchAllResult(results=output, status=status)
 

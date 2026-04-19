@@ -5,7 +5,7 @@ Search Evaluator Agent (Phase 2)
 4カテゴリの検索結果を横断的に評価し、
 十分/不足カテゴリを判定する。
 
-Heavy LLM（nubia）を使用。
+Heavy LLM（gpu-heavy）を使用。
 """
 
 import json
@@ -29,7 +29,27 @@ class SearchEvaluatorAgent:
 
     4カテゴリの検索結果を横断的に評価し、
     sufficient/insufficient判定とhintsを出力する。
+
+    日程数に応じた必要POI数を計算し、十分性を判定する。
     """
+
+    def _calculate_required_pois(self, duration_days: int | None) -> dict[str, int]:
+        """日程数に応じた必要POI数を計算
+
+        目安:
+        - activity: 1日あたり2〜3件 → 日数 × 2.5（選択肢用に1.5倍）
+        - food: 1日あたり2〜3件（朝は省略可） → 日数 × 2.5
+        - hotel: 泊数分 + 選択肢 → (日数-1) × 1.5 + 1
+        - transportation: 主要アクセス2〜3件 → 固定3件
+        """
+        days = duration_days or 2  # デフォルト2日
+
+        return {
+            "activity": max(5, int(days * 2.5 * 1.5)),  # 最低5件
+            "food": max(4, int(days * 2.5 * 1.5)),      # 最低4件
+            "hotel": max(2, int((days - 1) * 1.5) + 1), # 最低2件
+            "transportation": 3,                         # 固定3件
+        }
 
     async def evaluate(
         self,
@@ -48,11 +68,14 @@ class SearchEvaluatorAgent:
         Returns:
             CrossCategoryEvaluation: 横断評価結果
         """
+        # 日程数に応じた必要POI数を計算
+        required_pois = self._calculate_required_pois(constraints.duration_days)
+
         # 結果サマリーを構築
         category_summaries = {}
         for category, result in search_results.items():
             items_info = []
-            for item in result.items[:10]:
+            for item in result.items[:15]:  # 評価用に15件まで表示
                 items_info.append({
                     "name": item.name,
                     "description": (item.description or "")[:80],
@@ -60,6 +83,7 @@ class SearchEvaluatorAgent:
                 })
             category_summaries[category.value] = {
                 "count": len(result.items),
+                "required": required_pois.get(category.value, 5),
                 "items": items_info,
             }
 
@@ -68,22 +92,33 @@ class SearchEvaluatorAgent:
 
 ## 旅行条件
 - 目的地: {constraints.destination}
-- 日数: {constraints.duration_days or '未定'}
+- 日数: {constraints.duration_days or '未定'}日間
 - 予算: {constraints.budget_total or '未定'}円
-- 人数: {constraints.num_people}
+- 人数: {constraints.num_people}人
 - 移動手段制約: {constraints.transportation or 'なし'}
 
 ## 希望
 {json.dumps(wishes.model_dump(), ensure_ascii=False, default=str)}
 
-## 検索結果サマリー
-{json.dumps(category_summaries, ensure_ascii=False)}
+## 検索結果サマリー（現在の件数 / 必要件数）
+{json.dumps(category_summaries, ensure_ascii=False, indent=2)}
 
-## 評価基準
+## 評価基準（日程数ベース）
 各カテゴリについて以下を評価:
-1. 候補数は旅程作成に十分か（activity: 5件以上、food: 3件以上、hotel: 2件以上、transportation: 1件以上）
-2. 希望に合った多様な選択肢があるか
-3. 旅程全体として整合性があるか（例：交通とアクティビティの接続）
+
+1. **数量チェック**: 現在の件数が必要件数（required）を満たしているか
+   - activity: {required_pois['activity']}件以上必要（{constraints.duration_days or 2}日間の旅程用）
+   - food: {required_pois['food']}件以上必要
+   - hotel: {required_pois['hotel']}件以上必要
+   - transportation: {required_pois['transportation']}件以上必要
+
+2. **多様性チェック**: 希望に合った多様な選択肢があるか
+   - 同じような場所ばかりでないか
+   - 価格帯や雰囲気のバリエーションがあるか
+
+3. **整合性チェック**: 旅程全体として成り立つか
+   - 交通とアクティビティの接続
+   - 食事と観光の時間帯整合
 
 ## 出力形式（JSON）
 {{
@@ -91,7 +126,7 @@ class SearchEvaluatorAgent:
   "insufficient_categories": [
     {{
       "category": "不足カテゴリ名",
-      "reason": "不足の理由",
+      "reason": "不足の理由（数量不足 or 多様性不足 or 整合性問題）",
       "hints": ["追加検索のヒント1", "追加検索のヒント2"]
     }}
   ]
